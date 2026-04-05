@@ -11,7 +11,7 @@
 [![Release](https://img.shields.io/github/v/release/MPP32/MPP32?color=orange)](https://github.com/MPP32/MPP32/releases)
 [![Platform](https://img.shields.io/badge/Platform-Live-brightgreen)](https://mpp32.org)
 [![Solana](https://img.shields.io/badge/Built%20on-Solana-9945FF?logo=solana&logoColor=white)](https://solana.com)
-[![Follow on X](https://img.shields.io/badge/Follow-%40MPP32__-black?logo=x)](https://x.com/MPP32_)
+[![Follow on X](https://img.shields.io/badge/Follow-%40MPP32__dev-black?logo=x)](https://x.com/MPP32_dev)
 
 [**mpp32.org**](https://mpp32.org) &nbsp;·&nbsp; [Playground](https://mpp32.org/playground) &nbsp;·&nbsp; [Docs](https://mpp32.org/docs) &nbsp;·&nbsp; [Build on MPP32](https://mpp32.org/build) &nbsp;·&nbsp; [Roadmap](docs/ROADMAP.md)
 
@@ -200,7 +200,7 @@ MIT — see [LICENSE](LICENSE).
 <div align="center">
   <sub>
     Built by the MPP32 team &nbsp;·&nbsp;
-    <a href="https://x.com/MPP32_">@MPP32_ on X</a> &nbsp;·&nbsp;
+    <a href="https://x.com/MPP32_dev">@MPP32_dev on X</a> &nbsp;·&nbsp;
     <a href="https://mpp32.org">mpp32.org</a>
   </sub>
 </div>
