@@ -25,7 +25,7 @@ const footerLinks = {
   Company: [
     { label: "About", href: "/about" },
     { label: "Contact", href: "/contact" },
-    { label: "Follow on X", href: "https://x.com/MPP32_", external: true },
+    { label: "Follow on X", href: "https://x.com/MPP32_dev", external: true },
   ],
 };
 
