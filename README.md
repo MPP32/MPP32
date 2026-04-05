@@ -6,12 +6,14 @@
 
 **Real-time Solana token intelligence, built on the Machine Payments Protocol.**
 
+[![CI](https://github.com/MPP32/MPP32/actions/workflows/ci.yml/badge.svg)](https://github.com/MPP32/MPP32/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-orange.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/MPP32/MPP32?color=orange)](https://github.com/MPP32/MPP32/releases)
 [![Platform](https://img.shields.io/badge/Platform-Live-brightgreen)](https://mpp32.org)
 [![Solana](https://img.shields.io/badge/Built%20on-Solana-9945FF?logo=solana&logoColor=white)](https://solana.com)
 [![Follow on X](https://img.shields.io/badge/Follow-%40MPP32__-black?logo=x)](https://x.com/MPP32_)
 
-[**mpp32.org**](https://mpp32.org) &nbsp;·&nbsp; [Playground](https://mpp32.org/playground) &nbsp;·&nbsp; [Docs](https://mpp32.org/docs) &nbsp;·&nbsp; [Build on MPP32](https://mpp32.org/build)
+[**mpp32.org**](https://mpp32.org) &nbsp;·&nbsp; [Playground](https://mpp32.org/playground) &nbsp;·&nbsp; [Docs](https://mpp32.org/docs) &nbsp;·&nbsp; [Build on MPP32](https://mpp32.org/build) &nbsp;·&nbsp; [Roadmap](docs/ROADMAP.md)
 
 </div>
 
@@ -168,7 +170,8 @@ MPP32/
 └── docs/                   # Extended documentation
     ├── API.md
     ├── ARCHITECTURE.md
-    └── QUICKSTART.md
+    ├── QUICKSTART.md
+    └── ROADMAP.md
 ```
 
 ---
@@ -178,6 +181,7 @@ MPP32/
 - [API Reference](docs/API.md) — Endpoints, request/response shapes, authentication, error codes
 - [Architecture](docs/ARCHITECTURE.md) — How the oracle works, data pipeline, scoring model overview
 - [Quickstart](docs/QUICKSTART.md) — From zero to first query in five minutes
+- [Roadmap](docs/ROADMAP.md) — What's shipping next and what's planned through end of 2026
 
 ---
 
