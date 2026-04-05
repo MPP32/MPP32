@@ -26,6 +26,7 @@ const footerLinks = {
     { label: "About", href: "/about" },
     { label: "Contact", href: "/contact" },
     { label: "Follow on X", href: "https://x.com/MPP32_dev", external: true },
+    { label: "GitHub", href: "https://github.com/MPP32/MPP32", external: true },
   ],
 };
 
