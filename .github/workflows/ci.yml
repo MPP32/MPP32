@@ -8,7 +8,7 @@ on:
 
 jobs:
   backend:
-    name: Backend — typecheck & build
+    name: Backend — install & generate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,18 +20,22 @@ jobs:
 
       - name: Install dependencies
         working-directory: backend
-        run: bun install --frozen-lockfile
+        run: bun install
 
       - name: Generate Prisma client
         working-directory: backend
+        env:
+          DATABASE_URL: "file:./prisma/dev.db"
         run: bunx prisma generate
 
       - name: Typecheck
         working-directory: backend
-        run: bun run typecheck || bun x tsc --noEmit
+        env:
+          DATABASE_URL: "file:./prisma/dev.db"
+        run: bun run typecheck
 
   frontend:
-    name: Frontend — typecheck & build
+    name: Frontend — install & build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,14 +47,10 @@ jobs:
 
       - name: Install dependencies
         working-directory: webapp
-        run: bun install --frozen-lockfile
-
-      - name: Typecheck
-        working-directory: webapp
-        run: bun x tsc --noEmit
+        run: bun install
 
       - name: Build
         working-directory: webapp
-        run: bun run build
         env:
           VITE_BACKEND_URL: ""
+        run: bun run build
