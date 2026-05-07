@@ -287,6 +287,8 @@ proxyRouter.all(
           headers.set('X-ACP-Requirements', createACPChallenge(resource, String(price)))
           headers.set('X-ACP-Supported', 'true')
         }
+        if (ap2Active) methods.push('ap2')
+        if (agtpActive) methods.push('agtp')
         headers.set('X-Payment-Methods', methods.join(', '))
         if (ap2Active) {
           headers.set('X-AP2-Requirements', createAP2Challenge(resource))

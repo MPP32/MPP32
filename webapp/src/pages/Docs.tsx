@@ -6,7 +6,7 @@ const tabs = ["cURL", "JavaScript", "Python"] as const;
 type Tab = (typeof tabs)[number];
 
 const curlExample = `# Step 1: Make the initial request — you'll get 402
-curl -X POST https://api.mpp32.org/api/intelligence \\
+curl -X POST https://mpp32.org/api/intelligence \\
   -H "Content-Type: application/json" \\
   -d '{"token":"DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"}'
 # <- HTTP 402 Payment Required
@@ -14,7 +14,7 @@ curl -X POST https://api.mpp32.org/api/intelligence \\
 # x402:  X-Payment header with USDC on Solana
 
 # Step 2: Pay using mppx CLI and retry automatically
-npx mppx https://api.mpp32.org/api/intelligence \\
+npx mppx https://mpp32.org/api/intelligence \\
   --method POST \\
   --body '{"token":"DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"}' \\
   --private-key $PRIVATE_KEY
@@ -29,7 +29,7 @@ Mppx.create({
 })
 
 // Make the request — mppx intercepts the 402 and pays automatically
-const res = await fetch('https://api.mpp32.org/api/intelligence', {
+const res = await fetch('https://mpp32.org/api/intelligence', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
@@ -50,7 +50,7 @@ client = MPPClient(private_key=os.environ["PRIVATE_KEY"])
 
 # POST request — pympp handles the 402/payment flow
 response = client.post(
-    "https://api.mpp32.org/api/intelligence",
+    "https://mpp32.org/api/intelligence",
     json={"token": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"}
 )
 
@@ -236,7 +236,7 @@ export default function Docs() {
           </div>
           <div className="card-surface rounded p-4 mb-4">
             <pre className="font-mono text-xs text-foreground leading-relaxed whitespace-pre">{`# Include your wallet for a discounted 402 challenge
-curl -X POST https://api.mpp32.org/api/intelligence \\
+curl -X POST https://mpp32.org/api/intelligence \\
   -H "Content-Type: application/json" \\
   -H "X-Wallet-Address: <your-solana-wallet>" \\
   -d '{"token": "BONK"}'
@@ -254,7 +254,7 @@ curl -X POST https://api.mpp32.org/api/intelligence \\
           <h2 className="font-display text-2xl font-semibold text-foreground mb-4">Endpoint</h2>
           <div className="card-surface rounded p-4 mb-6 flex items-center gap-3">
             <span className="font-mono text-xs text-mpp-amber border border-mpp-amber/30 px-2 py-1 rounded">POST</span>
-            <span className="font-mono text-sm text-foreground">https://api.mpp32.org/api/intelligence</span>
+            <span className="font-mono text-sm text-foreground">https://mpp32.org/api/intelligence</span>
           </div>
 
           <h3 className="text-foreground font-semibold text-sm mb-3">Request Body</h3>
@@ -560,7 +560,7 @@ echo -n "YOUR_TOKEN_HERE" > .well-known/mpp32-verify`}</pre>
 curl https://your-api.com/endpoint
 
 # Test through the MPP32 proxy (requires MPP payment client)
-curl https://api.mpp32.org/api/proxy/your-slug`}</pre>
+curl https://mpp32.org/api/proxy/your-slug`}</pre>
             </div>
             <p className="text-muted-foreground text-xs mt-3">
               You can also use the{" "}
@@ -853,7 +853,7 @@ Agent: I'll query the intelligence endpoint for BONK.
                   <tr>
                     <td className="px-5 py-3 font-mono text-mpp-amber text-xs">MPP32_API_URL</td>
                     <td className="px-5 py-3 text-muted-foreground text-sm">No</td>
-                    <td className="px-5 py-3 text-muted-foreground text-xs">Override the MPP32 API base URL (default: https://api.mpp32.org)</td>
+                    <td className="px-5 py-3 text-muted-foreground text-xs">Override the MPP32 API base URL (default: https://mpp32.org)</td>
                   </tr>
                 </tbody>
               </table>

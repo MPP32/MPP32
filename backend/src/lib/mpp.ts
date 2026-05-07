@@ -56,6 +56,8 @@ function buildPaymentMethodsList(): string {
   const methods = ['tempo']
   if (isX402Enabled()) methods.push('x402')
   if (isACPEnabled()) methods.push('acp')
+  if (isAP2Enabled()) methods.push('ap2')
+  if (isAGTPEnabled()) methods.push('agtp')
   return methods.join(', ')
 }
 

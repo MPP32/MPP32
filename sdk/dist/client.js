@@ -1,4 +1,4 @@
-const DEFAULT_API_URL = 'https://api.mpp32.org';
+const DEFAULT_API_URL = 'https://mpp32.org';
 export class MPP32 {
     apiUrl;
     tempoPrivateKey;

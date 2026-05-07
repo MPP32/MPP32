@@ -1,0 +1,13 @@
+{
+  "version": "1.0",
+  "spec": "/api/openapi.json",
+  "protocols": ["tempo", "x402", "acp", "ap2", "agtp"],
+  "payment_methods": ["tempo", "x402", "acp", "ap2", "agtp"],
+  "currency": "0x20c0000000000000000000000000000000000000",
+  "chain_id": 4217,
+  "info": {
+    "name": "MPP32 — Universal Agent Payment Proxy",
+    "description": "Universal payment proxy for machine-payable APIs with 5-protocol support",
+    "documentation": "https://mpp32.org/api/discovery"
+  }
+}

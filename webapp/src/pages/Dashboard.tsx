@@ -171,7 +171,7 @@ import { privateKeyToAccount } from 'viem/accounts'
 
 Mppx.create({ methods: [tempo({ account: privateKeyToAccount(process.env.PRIVATE_KEY) })] })
 
-const res = await fetch('https://api.mpp32.org/api/intelligence', {
+const res = await fetch('https://mpp32.org/api/intelligence', {
   method: 'POST',
   body: JSON.stringify({ token: 'NV2RYH954cTJ3ckFUpvfqaQXU4ARqqDH3562nFSpump' })
 })

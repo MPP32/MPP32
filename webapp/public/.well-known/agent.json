@@ -1,0 +1,48 @@
+{
+  "name": "MPP32",
+  "description": "Universal payment proxy for machine-payable APIs. Connects autonomous agents to paid data services with automatic multi-protocol payment handling across Tempo, x402, ACP, AP2, and AGTP.",
+  "url": "https://mpp32.org",
+  "version": "2.0.0",
+  "capabilities": {
+    "streaming": false,
+    "pushNotifications": false,
+    "stateTransitionHistory": false
+  },
+  "skills": [
+    {
+      "id": "solana-token-intelligence",
+      "name": "Solana Token Intelligence",
+      "description": "Real-time alpha score, rug risk, whale activity, smart money signals, and market data for any Solana token. Sources: DexScreener, Jupiter, CoinGecko.",
+      "tags": ["solana", "crypto", "defi", "intelligence", "token", "whale", "rug-risk", "alpha"],
+      "examples": [
+        "Analyze SOL token for rug risk and whale activity",
+        "Get alpha score and pump probability for BONK",
+        "What is the smart money signal for JUP token"
+      ]
+    },
+    {
+      "id": "api-proxy",
+      "name": "Universal API Proxy",
+      "description": "Route requests to any registered machine-payable API provider. Automatic payment handling, endpoint verification, and protocol translation.",
+      "tags": ["proxy", "api", "marketplace", "payments", "agent-commerce"],
+      "examples": [
+        "List all available API services on MPP32",
+        "Call the weather API through MPP32 proxy",
+        "Find crypto data providers on the marketplace"
+      ]
+    }
+  ],
+  "authentication": {
+    "schemes": ["x402", "tempo", "acp", "ap2", "agtp"],
+    "description": "All endpoints accept 5 payment and authorization protocols. HTTP 402 challenge-response for Tempo and x402. Header-based for ACP, AP2, and AGTP."
+  },
+  "defaultInputModes": ["application/json"],
+  "defaultOutputModes": ["application/json"],
+  "provider": {
+    "organization": "MPP32",
+    "url": "https://mpp32.org"
+  },
+  "documentationUrl": "https://mpp32.org/api/discovery",
+  "openApiUrl": "https://mpp32.org/api/openapi.json",
+  "mcpConfigUrl": "https://mpp32.org/api/mcp-config"
+}

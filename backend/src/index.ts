@@ -120,7 +120,7 @@ app.get("/health", async (c) => {
 // MPP OpenAPI discovery document — required for MPPScan registration
 async function openApiHandler(c: any) {
   const proto = c.req.header("x-forwarded-proto") || "https";
-  const host = c.req.header("x-forwarded-host") || c.req.header("host") || "api.mpp32.org";
+  const host = c.req.header("x-forwarded-host") || c.req.header("host") || "mpp32.org";
   const serverUrl = `${proto}://${host}`;
 
   const submissions = await prisma.submission.findMany({
@@ -166,7 +166,7 @@ async function openApiHandler(c: any) {
     },
     "x-service-info": {
       categories: ["data", "crypto", "intelligence", "proxy"],
-      documentation: "https://api.mpp32.org/api/submissions",
+      documentation: "https://mpp32.org/api/submissions",
     },
     servers: [{ url: serverUrl }],
     paths: {
@@ -230,7 +230,7 @@ app.get("/api/discovery", openApiHandler);
 // A2A Agent Card — standard agent-to-agent discovery format
 app.get("/.well-known/agent.json", (c) => {
   const proto = c.req.header("x-forwarded-proto") || "https";
-  const host = c.req.header("x-forwarded-host") || c.req.header("host") || "api.mpp32.org";
+  const host = c.req.header("x-forwarded-host") || c.req.header("host") || "mpp32.org";
   const serverUrl = `${proto}://${host}`;
 
   return c.json({

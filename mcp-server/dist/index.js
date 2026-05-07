@@ -2,7 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-const API_URL = process.env.MPP32_API_URL?.replace(/\/$/, "") || "https://api.mpp32.org";
+const API_URL = process.env.MPP32_API_URL?.replace(/\/$/, "") || "https://mpp32.org";
 const PRIVATE_KEY = process.env.MPP32_PRIVATE_KEY;
 const server = new McpServer({
     name: "mpp32",

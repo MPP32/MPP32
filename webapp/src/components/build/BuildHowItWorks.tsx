@@ -31,7 +31,7 @@ app.post('/analyze', async (req, res) => {
     number: "04",
     title: "Earn On Every Query",
     description:
-      "Callers hit your proxy URL (api.mpp32.org/api/proxy/your-slug). Every successful query settles a payment directly to your wallet across any of the five supported protocols. No invoicing, no custody, no waiting. Track stats and edit settings anytime from the Manage Dashboard.",
+      "Callers hit your proxy URL (mpp32.org/api/proxy/your-slug). Every successful query settles a payment directly to your wallet across any of the five supported protocols. No invoicing, no custody, no waiting. Track stats and edit settings anytime from the Manage Dashboard.",
     code: null,
   },
 ];

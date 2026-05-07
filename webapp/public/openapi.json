@@ -1,0 +1,171 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "MPP32 — Universal Agent Payment Proxy",
+    "version": "2.0.0",
+    "description": "Universal payment proxy for machine-payable APIs. All endpoints accept 5 protocols: Tempo (pathUSD), x402 (USDC on Solana), ACP (Agent Commerce Protocol), AP2 (W3C Verifiable Credentials), and AGTP (Agent Transfer Protocol). Providers register once — MPP32 handles protocol translation, payment verification, and settlement automatically.",
+    "x-guidance": "All paid endpoints return HTTP 402 with payment challenge headers for all active protocols. Tempo clients: use WWW-Authenticate header, reply with Authorization: Payment <receipt>. x402 clients: use Payment-Required header (base64 JSON), reply with X-Payment header. ACP clients: use X-ACP-Requirements header, reply with X-ACP-Session header containing session ID or base64 credential. AP2 clients: include X-AP2-Mandate header with base64-encoded W3C Verifiable Credential (ECDSA P-256 signed). AGTP clients: include Agent-ID header for agent identity tracking and priority routing. All protocols accepted on all endpoints. Prices are in USD — payable via any supported protocol.",
+    "x-canonical-url": "https://mpp32.org/api/openapi.json"
+  },
+  "x-service-info": {
+    "categories": ["data", "crypto", "intelligence", "proxy"],
+    "documentation": "https://mpp32.org/api/submissions"
+  },
+  "servers": [
+    { "url": "https://mpp32.org" }
+  ],
+  "paths": {
+    "/api/intelligence": {
+      "post": {
+        "operationId": "solana-token-intelligence",
+        "summary": "Solana Token Intelligence",
+        "description": "Returns alpha score, rug risk, whale activity, and market data for any Solana token. Data sourced from DexScreener, Jupiter, and CoinGecko in real-time.",
+        "tags": ["intelligence", "solana", "crypto"],
+        "x-payment-info": {
+          "protocols": [
+            {
+              "mpp": {
+                "method": "tempo",
+                "intent": "charge",
+                "currency": "0x20c0000000000000000000000000000000000000"
+              }
+            },
+            {
+              "x402": {
+                "method": "exact",
+                "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+                "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                "payTo": "9Pa8yUe8k1aRAoS1J8T5d4Mc4zXH2QTKiHE7wibowt6S"
+              }
+            },
+            {
+              "ap2": {
+                "version": "2025.0",
+                "mandateTypes": ["intent", "cart", "payment"],
+                "signatureAlgorithm": "ECDSA P-256",
+                "header": "X-AP2-Mandate"
+              }
+            },
+            {
+              "acp": {
+                "version": "2026-04-17",
+                "checkoutEndpoint": "/checkout_sessions",
+                "header": "X-ACP-Session",
+                "capabilities": ["checkout", "cart", "payment"]
+              }
+            },
+            {
+              "agtp": {
+                "version": "draft-hood-independent-agtp-01",
+                "methods": ["QUERY", "SUMMARIZE", "BOOK", "SCHEDULE", "DELEGATE", "COLLABORATE"],
+                "headers": {
+                  "required": ["Agent-ID"],
+                  "optional": ["Principal-ID", "Authority-Scope"]
+                }
+              }
+            }
+          ],
+          "price": {
+            "mode": "fixed",
+            "amount": "0.008",
+            "currency": "USD"
+          },
+          "x-discount-info": {
+            "header": "X-Wallet-Address",
+            "description": "Pass your Solana wallet address to receive M32 token holder discounts.",
+            "tiers": [
+              { "minBalance": 250000, "token": "M32", "discountPercent": 20, "effectivePrice": "0.0064" },
+              { "minBalance": 1000000, "token": "M32", "discountPercent": 40, "effectivePrice": "0.0048" }
+            ]
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["token"],
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "description": "Solana token address or ticker symbol"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Token intelligence data" },
+          "402": { "description": "Payment Required — accepts 5 protocols: Tempo (pathUSD), x402 (USDC on Solana), ACP (Agent Commerce), AP2 (W3C Verifiable Credentials), AGTP (Agent Transfer Protocol)" },
+          "404": { "description": "No trading pairs found for the given token" },
+          "502": { "description": "Data fetch error from upstream sources" }
+        }
+      }
+    },
+    "/api/proxy/mpp32-intelligence": {
+      "post": {
+        "operationId": "proxy-mpp32-intelligence",
+        "summary": "MPP32 Solana Intelligence Oracle",
+        "description": "Real-time Solana token intelligence with alpha scores, rug risk, whale tracking, and market data from DexScreener, Jupiter, and CoinGecko.",
+        "tags": ["token-scanner"],
+        "x-payment-info": {
+          "protocols": [
+            {
+              "mpp": {
+                "method": "tempo",
+                "intent": "charge",
+                "currency": "0x20c0000000000000000000000000000000000000"
+              }
+            },
+            {
+              "x402": {
+                "method": "exact",
+                "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+                "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                "payTo": "9Pa8yUe8k1aRAoS1J8T5d4Mc4zXH2QTKiHE7wibowt6S"
+              }
+            },
+            {
+              "ap2": {
+                "version": "2025.0",
+                "mandateTypes": ["intent", "cart", "payment"],
+                "signatureAlgorithm": "ECDSA P-256",
+                "header": "X-AP2-Mandate"
+              }
+            },
+            {
+              "acp": {
+                "version": "2026-04-17",
+                "checkoutEndpoint": "/checkout_sessions",
+                "header": "X-ACP-Session",
+                "capabilities": ["checkout", "cart", "payment"]
+              }
+            },
+            {
+              "agtp": {
+                "version": "draft-hood-independent-agtp-01",
+                "methods": ["QUERY", "SUMMARIZE", "BOOK", "SCHEDULE", "DELEGATE", "COLLABORATE"],
+                "headers": {
+                  "required": ["Agent-ID"],
+                  "optional": ["Principal-ID", "Authority-Scope", "AGTP-Session-ID"]
+                }
+              }
+            }
+          ],
+          "price": {
+            "mode": "fixed",
+            "amount": "0.008",
+            "currency": "USD"
+          }
+        },
+        "responses": {
+          "200": { "description": "Successful response from upstream service" },
+          "402": { "description": "Payment Required — accepts 5 protocols: Tempo (pathUSD), x402 (USDC on Solana), ACP (Agent Commerce), AP2 (W3C Verifiable Credentials), AGTP (Agent Transfer Protocol)" },
+          "502": { "description": "Upstream service error" }
+        }
+      }
+    }
+  }
+}

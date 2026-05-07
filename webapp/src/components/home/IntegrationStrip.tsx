@@ -2,11 +2,11 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 
-const curlCode = `curl -X POST https://api.mpp32.org/api/intelligence \\
+const curlCode = `curl -X POST https://mpp32.org/api/intelligence \\
   -H "Content-Type: application/json" \\
   -d '{"token":"DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"}'
 # <- 402 Payment Required (5 protocol challenges)
-# Pay via: npx mppx https://api.mpp32.org/api/intelligence ...`;
+# Pay via: npx mppx https://mpp32.org/api/intelligence ...`;
 
 const jsCode = `import { Mppx } from 'mppx/client'
 
@@ -16,7 +16,7 @@ const client = Mppx.create({
 
 // MPP32 returns 402 with all 5 protocol challenges.
 // The client picks whichever protocol it supports and pays.
-const res = await client.fetch('https://api.mpp32.org/api/intelligence', {
+const res = await client.fetch('https://mpp32.org/api/intelligence', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({ token: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263' })

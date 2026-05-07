@@ -6,7 +6,7 @@ import type {
   PaymentChallenge,
 } from './types.js'
 
-const DEFAULT_API_URL = 'https://api.mpp32.org'
+const DEFAULT_API_URL = 'https://mpp32.org'
 
 const DEFAULT_RETRY_CONFIG: RetryConfig = {
   maxRetries: 3,

@@ -1,0 +1,44 @@
+# MPP32
+
+> Machine-payable API platform for Solana token intelligence and third-party API monetization. All endpoints use HTTP 402 via the Machine Payments Protocol (MPP). Payments settle on Tempo in pathUSD.
+
+## Solana Token Intelligence Oracle
+
+- [POST /api/intelligence](https://mpp32.vibecode.run/api/intelligence): Returns alpha score, rug risk, whale activity, market data, and social signals for any Solana token. 0.008 pathUSD per query.
+- [POST /api/intelligence/demo](https://mpp32.vibecode.run/api/intelligence/demo): Free demo endpoint, rate-limited to 10 req/min. Same data as the paid endpoint.
+
+## API Proxy Marketplace
+
+- [GET /api/submissions](https://mpp32.vibecode.run/api/submissions): Browse all listed MPP services. Returns name, slug, category, price, and payment address.
+- [POST /api/proxy/{slug}](https://mpp32.vibecode.run/api/proxy): Payment-gated proxy to any listed service. Pay via MPP, get upstream response.
+- [GET /api/proxy/{slug}/info](https://mpp32.vibecode.run/api/proxy): Public metadata for any listed service (no payment required).
+
+## Discovery
+
+- [OpenAPI Spec](https://mpp32.vibecode.run/openapi.json): Full OpenAPI 3.1 spec with x-payment-info extensions for automated agent discovery.
+- [MPPScan Listing](https://www.mppscan.com): Registered on the MPP protocol explorer.
+- [Health Check](https://mpp32.vibecode.run/health): Server status and database connectivity.
+
+## Integration
+
+Install the mppx SDK to make paid requests:
+
+```
+npm install mppx
+```
+
+The 402 flow: Send request -> receive payment challenge -> pay on Tempo -> retry with authorization header -> receive data.
+
+## Builder Platform
+
+API providers can list their own services on MPP32:
+- Submit your HTTP endpoint, set your price, receive 100% of payments directly to your wallet
+- [Build Page](https://mpp32.org/build): Submit a new service
+- [Ecosystem](https://mpp32.org/ecosystem): Browse all listed services
+
+## Links
+
+- Website: https://mpp32.org
+- API Base: https://mpp32.vibecode.run
+- MPP Protocol: https://paymentauth.org
+- mppx SDK: https://github.com/wevm/mppx

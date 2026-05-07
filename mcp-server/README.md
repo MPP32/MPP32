@@ -70,7 +70,7 @@ Call a machine-payable API. Handles the full HTTP 402 payment flow automatically
 | Variable            | Required | Description                                                        |
 | ------------------- | -------- | ------------------------------------------------------------------ |
 | `MPP32_PRIVATE_KEY` | Yes      | EVM private key for a wallet funded with pathUSD on Tempo          |
-| `MPP32_API_URL`     | No       | Override API base URL (default: `https://api.mpp32.org`)           |
+| `MPP32_API_URL`     | No       | Override API base URL (default: `https://mpp32.org`)               |
 
 ## How It Works
 

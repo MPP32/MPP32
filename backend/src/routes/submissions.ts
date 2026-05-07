@@ -578,7 +578,7 @@ submissionsRouter.post(
         logoUrl: body.logoUrl ?? null,
         twitterHandle: body.twitterHandle ?? null,
         githubUrl: body.githubUrl ?? null,
-        status: 'approved',
+        status: 'pending',
         managementToken: tokenHash,
         verificationToken,
         isVerified: false,

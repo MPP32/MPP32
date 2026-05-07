@@ -1,0 +1,14 @@
+#!/bin/bash
+set -o errexit
+set -o nounset
+set -o pipefail
+
+# Install
+bun install 
+
+# Build the webapp
+echo "Building webapp..."
+bun run vite build --outDir dist
+
+# Done building, keep the service running
+sleep infinity
