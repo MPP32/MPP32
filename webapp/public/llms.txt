@@ -1,33 +1,44 @@
 # MPP32
 
-> Machine-payable API platform for Solana token intelligence and third-party API monetization. All endpoints use HTTP 402 via the Machine Payments Protocol (MPP). Payments settle on Tempo in pathUSD.
+> Universal payment proxy for machine-payable APIs. All endpoints accept 5 payment protocols: Tempo (pathUSD), x402 (USDC on Solana), ACP, AP2, and AGTP. Providers register once — every protocol works automatically.
 
 ## Solana Token Intelligence Oracle
 
-- [POST /api/intelligence](https://mpp32.vibecode.run/api/intelligence): Returns alpha score, rug risk, whale activity, market data, and social signals for any Solana token. 0.008 pathUSD per query.
-- [POST /api/intelligence/demo](https://mpp32.vibecode.run/api/intelligence/demo): Free demo endpoint, rate-limited to 10 req/min. Same data as the paid endpoint.
+- [POST /api/intelligence](https://mpp32.org/api/intelligence): Returns alpha score, rug risk, whale activity, market data, and social signals for any Solana token. $0.008 per query.
 
 ## API Proxy Marketplace
 
-- [GET /api/submissions](https://mpp32.vibecode.run/api/submissions): Browse all listed MPP services. Returns name, slug, category, price, and payment address.
-- [POST /api/proxy/{slug}](https://mpp32.vibecode.run/api/proxy): Payment-gated proxy to any listed service. Pay via MPP, get upstream response.
-- [GET /api/proxy/{slug}/info](https://mpp32.vibecode.run/api/proxy): Public metadata for any listed service (no payment required).
+- [GET /api/submissions](https://mpp32.org/api/submissions): Browse all listed services. Returns name, slug, category, price, and payment address.
+- [POST /api/proxy/{slug}](https://mpp32.org/api/proxy): Payment-gated proxy to any listed service. Accepts all 5 payment protocols.
+- [GET /api/proxy/{slug}/info](https://mpp32.org/api/proxy): Public metadata for any listed service (no payment required).
 
 ## Discovery
 
-- [OpenAPI Spec](https://mpp32.vibecode.run/openapi.json): Full OpenAPI 3.1 spec with x-payment-info extensions for automated agent discovery.
-- [MPPScan Listing](https://www.mppscan.com): Registered on the MPP protocol explorer.
-- [Health Check](https://mpp32.vibecode.run/health): Server status and database connectivity.
+- [OpenAPI Spec](https://mpp32.org/openapi.json): Full OpenAPI 3.1 spec with x-payment-info extensions for automated agent discovery.
+- [Agent Card](https://mpp32.org/.well-known/agent.json): A2A agent-to-agent discovery card.
+- [MCP Config](https://mpp32.org/api/mcp-config): Model Context Protocol server configuration.
+- [Health Check](https://mpp32.org/health): Server status and database connectivity.
+
+## Payment Protocols
+
+| Protocol | Header | Network |
+|----------|--------|---------|
+| Tempo | WWW-Authenticate / Authorization: Payment | pathUSD on Ethereum L2 |
+| x402 | Payment-Required / X-Payment | USDC on Solana |
+| ACP | X-ACP-Requirements / X-ACP-Session | Agent Commerce Protocol |
+| AP2 | X-AP2-Mandate | W3C Verifiable Credentials (ECDSA P-256) |
+| AGTP | Agent-ID | Agent Transfer Protocol |
 
 ## Integration
 
-Install the mppx SDK to make paid requests:
+Install the SDK or MCP server:
 
 ```
-npm install mppx
+npm install mpp32          # TypeScript SDK
+npx mpp32-mcp-server       # MCP server for Claude/agents
 ```
 
-The 402 flow: Send request -> receive payment challenge -> pay on Tempo -> retry with authorization header -> receive data.
+The 402 flow: Send request -> receive payment challenge -> pay via any protocol -> retry with authorization -> receive data.
 
 ## Builder Platform
 
@@ -39,6 +50,5 @@ API providers can list their own services on MPP32:
 ## Links
 
 - Website: https://mpp32.org
-- API Base: https://mpp32.vibecode.run
-- MPP Protocol: https://paymentauth.org
+- GitHub: https://github.com/MPP32/MPP32
 - mppx SDK: https://github.com/wevm/mppx
