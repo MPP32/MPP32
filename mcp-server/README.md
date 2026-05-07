@@ -8,27 +8,7 @@ MCP (Model Context Protocol) server for **MPP32** — the machine-payable API pl
 npx mpp32-mcp-server
 ```
 
-### Claude Desktop
-
-Add to your `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "mpp32": {
-      "command": "npx",
-      "args": ["mpp32-mcp-server"],
-      "env": {
-        "MPP32_PRIVATE_KEY": "your-tempo-private-key"
-      }
-    }
-  }
-}
-```
-
-### Claude Code
-
-Add to `.claude/settings.json`:
+Add to your MCP agent configuration:
 
 ```json
 {

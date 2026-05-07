@@ -90,7 +90,7 @@ This endpoint accepts all 5 protocols like any other provider on the platform.
 |----------|--------|---------|
 | `/openapi.json` | OpenAPI 3.1 | Full API spec with per-endpoint protocol and pricing info |
 | `/.well-known/agent.json` | A2A Agent Card | Agent-to-agent discovery with skills and auth schemes |
-| `/api/mcp-config` | MCP Config | Claude Desktop / MCP server integration |
+| `/api/mcp-config` | MCP Config | MCP-compatible agent integration |
 | `/api/submissions` | JSON | Public directory of all registered API providers |
 
 ## Stack

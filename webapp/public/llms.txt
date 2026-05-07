@@ -35,7 +35,7 @@ Install the SDK or MCP server:
 
 ```
 npm install mpp32          # TypeScript SDK
-npx mpp32-mcp-server       # MCP server for Claude/agents
+npx mpp32-mcp-server       # MCP server for AI agents
 ```
 
 The 402 flow: Send request -> receive payment challenge -> pay via any protocol -> retry with authorization -> receive data.

@@ -2,7 +2,6 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { createMiddleware } from "hono/factory";
 import { env } from "./env";
-import { sampleRouter } from "./routes/sample";
 import intelligence from "./routes/intelligence";
 import { submissionsRouter } from "./routes/submissions";
 import { proxyRouter } from "./routes/proxy";
@@ -305,7 +304,7 @@ app.get("/api/mcp-config", (c) => {
         "acp", "ap2", "agtp", "machine-payable", "mpp32",
       ],
       categories: ["finance", "crypto", "data", "intelligence", "payments", "agent-commerce"],
-      claude_desktop_config: {
+      mcpConfig: {
         mcpServers: {
           mpp32: {
             command: "npx",
@@ -395,7 +394,6 @@ app.get("/api/mcp-config", (c) => {
 });
 
 // Routes
-app.route("/api/sample", sampleRouter);
 app.route("/api/intelligence", intelligence);
 app.route("/api/submissions", submissionsRouter);
 app.route("/api/proxy", proxyRouter);
