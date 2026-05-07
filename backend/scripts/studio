@@ -1,0 +1,20 @@
+#!/bin/bash
+set -e
+
+# Load shared environment setup
+source "$(dirname "$0")/env.sh"
+
+# Install dependencies
+echo "Installing dependencies..."
+bun install
+
+if [ ! -f "prisma/schema.prisma" ]; then
+  echo "No prisma/schema.prisma found. Studio requires a Prisma schema."
+  sleep 30
+  exit 1
+fi
+
+echo "Starting Cloud Studio..."
+# Exec directly to cloud-studio binary so signals propagate correctly
+# (bun run <script> spawns a child process that doesn't receive signals)
+exec bunx cloud-studio --port 3001 --hostname 0.0.0.0

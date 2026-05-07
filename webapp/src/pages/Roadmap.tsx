@@ -1,0 +1,249 @@
+import { useState } from "react";
+import { Link } from "react-router-dom";
+import { Copy, Check } from "lucide-react";
+
+const CA = "6hKtz8FV7cAQMrbjcBZeTQAcrYep3WCM83164JpJpump";
+
+const tokenTiers = [
+  {
+    label: "No tokens",
+    rate: "0.008 USD / query",
+    note: "Standard rate",
+    highlight: false,
+  },
+  {
+    label: "Hold 250K+ M32",
+    rate: "0.0064 USD / query",
+    note: "20% fee reduction",
+    highlight: false,
+  },
+  {
+    label: "Hold 1M+ M32",
+    rate: "0.0048 USD / query",
+    note: "40% fee reduction + early access to new features",
+    highlight: true,
+  },
+];
+
+type PhaseStatus = "LIVE" | "IN PROGRESS" | "UPCOMING" | "PLANNED";
+
+interface Milestone {
+  text: string;
+  done?: boolean;
+}
+
+interface Phase {
+  num: string;
+  status: PhaseStatus;
+  date: string;
+  title: string;
+  milestones: Milestone[];
+}
+
+const phases: Phase[] = [
+  {
+    num: "01",
+    status: "LIVE",
+    date: "Now",
+    title: "Core Infrastructure",
+    milestones: [
+      { text: "Alpha Score engine with 6-signal composite scoring", done: true },
+      { text: "8-dimension intelligence payloads (Whale Activity, Rug Risk, Smart Money, etc.)", done: true },
+      { text: "On-chain data aggregation and real-time price API integration", done: true },
+      { text: "Pay-per-query across 5 protocols: Tempo, x402, ACP, AP2, and AGTP", done: true },
+      { text: "Multi-protocol payment acceptance with universal 402 challenge headers", done: true },
+      { text: "Live playground endpoint for evaluation", done: true },
+      { text: "Builder SDK support (mppx, pympp)", done: true },
+      { text: "Provider management dashboard (live stats, settings, token recovery, deprecation)", done: true },
+    ],
+  },
+  {
+    num: "02",
+    status: "IN PROGRESS",
+    date: "Month 1-2 · targeting Q2 2026",
+    title: "Provider Tools and Protocol Expansion",
+    milestones: [
+      { text: "Token gated fee reduction for MPP32 Oracle (250K / 1M tiers)", done: true },
+      { text: "API key system for providers with high volume callers" },
+      { text: "Provider revenue dashboards with exportable analytics and payout history" },
+      { text: "Webhook notifications for providers on query milestones, errors, and revenue thresholds" },
+      { text: "Additional payment protocol support as new standards emerge (AP2 and others under evaluation)" },
+      { text: "Provider SDK improvements: typed responses, automatic retry configuration, custom headers", done: true },
+    ],
+  },
+  {
+    num: "03",
+    status: "UPCOMING",
+    date: "Month 3-4 · targeting Q3 2026",
+    title: "Ecosystem Growth and Multi Protocol",
+    milestones: [
+      { text: "Provider tiers: verified status, priority listing, and dedicated proxy capacity for high volume services" },
+      { text: "Multi chain proxy support: accept payments and forward requests across Solana, Base, and Arbitrum" },
+      { text: "Provider onboarding API: register and manage services programmatically without the dashboard" },
+      { text: "Ecosystem analytics: public volume metrics, category trends, and protocol health data" },
+    ],
+  },
+  {
+    num: "04",
+    status: "PLANNED",
+    date: "Month 5-6 · targeting Q4 2026",
+    title: "Governance & Scale",
+    milestones: [
+      { text: "DAO governance: token-weighted voting on scoring weight adjustments" },
+      { text: "Protocol fee revenue distribution to stakers" },
+      { text: "Traditional card and layer-2 payment options (alongside pathUSD and USDC)" },
+      { text: "Enterprise SLA tier with dedicated infrastructure" },
+      { text: "MPP32 mobile companion app (iOS + Android)" },
+      { text: "Full TypeScript, Python, and Rust SDK releases" },
+    ],
+  },
+];
+
+const statusBadge: Record<PhaseStatus, string> = {
+  LIVE: "bg-mpp-success/10 text-mpp-success border border-mpp-success/20 font-mono text-xs px-2 py-0.5 rounded",
+  "IN PROGRESS": "bg-mpp-amber/10 text-mpp-amber border border-mpp-amber/20 font-mono text-xs px-2 py-0.5 rounded",
+  UPCOMING: "bg-mpp-border/40 text-muted-foreground border border-mpp-border font-mono text-xs px-2 py-0.5 rounded",
+  PLANNED: "bg-mpp-border/20 text-muted-foreground/60 border border-mpp-border/40 font-mono text-xs px-2 py-0.5 rounded",
+};
+
+function MilestoneLine({ milestone, status }: { milestone: Milestone; status: PhaseStatus }) {
+  const isDone = status === "LIVE" || milestone.done;
+  return (
+    <li className="flex items-start gap-2 text-sm">
+      <span className={isDone ? "text-mpp-success mt-0.5 flex-shrink-0" : "text-mpp-amber mt-0.5 flex-shrink-0"}>
+        {isDone ? "✓" : "·"}
+      </span>
+      <span className={isDone ? "text-foreground" : "text-muted-foreground"}>{milestone.text}</span>
+    </li>
+  );
+}
+
+export default function Roadmap() {
+  const [copied, setCopied] = useState(false);
+
+  function handleCopy() {
+    navigator.clipboard.writeText(CA).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  return (
+    <div className="min-h-screen bg-mpp-bg">
+      {/* Hero */}
+      <section className="border-b border-mpp-border py-16">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+          <p className="font-mono text-mpp-amber text-xs uppercase tracking-widest mb-4">Roadmap</p>
+          <h1 className="font-display text-4xl sm:text-5xl font-semibold text-foreground mb-4">
+            What's being built.
+          </h1>
+          <p className="text-muted-foreground text-lg leading-relaxed">
+            MPP32 is protocol infrastructure. This is where we are, and where we're going.
+          </p>
+        </div>
+      </section>
+
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-16 space-y-16">
+
+        {/* Token Utility card */}
+        <section>
+          <div className="card-surface rounded p-5 border-l-2 border-l-mpp-amber">
+            <div className="flex items-start gap-4">
+              <span className="text-mpp-amber text-base flex-shrink-0 mt-0.5">■</span>
+              <div className="flex-1 min-w-0">
+                <p className="text-foreground font-semibold text-sm mb-1">MPP32 Token. Protocol Utility</p>
+                <p className="text-muted-foreground text-sm leading-relaxed mb-5">
+                  The MPP32 token is not speculative. It is the fee reduction and governance layer of the protocol.
+                  Holding MPP32 reduces your per-query cost and grants early access to new features as the protocol expands.
+                </p>
+
+                {/* Tiers */}
+                <div className="space-y-2 mb-5">
+                  {tokenTiers.map((tier) => (
+                    <div
+                      key={tier.label}
+                      className={`rounded p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 ${
+                        tier.highlight
+                          ? "bg-mpp-amber/5 border border-mpp-amber/20"
+                          : "bg-mpp-bg border border-mpp-border"
+                      }`}
+                    >
+                      <span className="text-foreground text-sm font-medium">{tier.label}</span>
+                      <div className="flex items-center gap-3">
+                        <span className="font-mono text-mpp-amber text-sm">{tier.rate}</span>
+                        <span className="text-muted-foreground text-xs">{tier.note}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* CA */}
+                <div className="mb-4">
+                  <p className="font-mono text-mpp-amber text-xs uppercase tracking-widest mb-2">Contract Address</p>
+                  <div className="flex items-center gap-2 bg-mpp-bg border border-mpp-border rounded px-3 py-2">
+                    <code className="font-mono text-xs text-foreground break-all flex-1">{CA}</code>
+                    <button
+                      onClick={handleCopy}
+                      className="flex-shrink-0 text-muted-foreground hover:text-mpp-amber transition-colors p-1 rounded"
+                      aria-label="Copy contract address"
+                    >
+                      {copied ? (
+                        <Check className="w-3.5 h-3.5 text-mpp-success" />
+                      ) : (
+                        <Copy className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                  </div>
+                  {copied && (
+                    <p className="font-mono text-mpp-success text-xs mt-1">Copied!</p>
+                  )}
+                </div>
+
+                <p className="text-muted-foreground text-xs leading-relaxed">
+                  Token gated fee reduction is <span className="font-mono text-mpp-success">LIVE</span>. Pass your wallet address via the <span className="font-mono text-mpp-amber">X-Wallet-Address</span> header to activate your discount automatically.
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Timeline */}
+        <section>
+          <h2 className="font-display text-2xl font-semibold text-foreground mb-8">Timeline</h2>
+          <div className="space-y-6">
+            {phases.map((phase) => (
+              <div key={phase.num} className="card-surface rounded p-5">
+                {/* Phase header */}
+                <div className="flex flex-wrap items-center gap-3 mb-1">
+                  <span className="font-mono text-mpp-amber text-xs uppercase tracking-widest">
+                    Phase {phase.num}
+                  </span>
+                  <span className={statusBadge[phase.status]}>{phase.status}</span>
+                </div>
+                <p className="font-mono text-muted-foreground/60 text-xs mb-3">{phase.date}</p>
+                <h3 className="text-foreground font-semibold text-base mb-4">{phase.title}</h3>
+
+                {/* Milestones */}
+                <ul className="space-y-2">
+                  {phase.milestones.map((m) => (
+                    <MilestoneLine key={m.text} milestone={m} status={phase.status} />
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* Bottom CTA */}
+        <section className="border-t border-mpp-border pt-8 text-center">
+          <p className="text-muted-foreground text-sm mb-4">Questions about the roadmap or token?</p>
+          <Link to="/contact">
+            <button className="btn-amber inline-flex items-center gap-2 px-6 py-2.5 rounded text-sm font-semibold">
+              Get in Touch
+            </button>
+          </Link>
+        </section>
+      </div>
+    </div>
+  );
+}

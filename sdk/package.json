@@ -1,0 +1,42 @@
+{
+  "name": "mpp32",
+  "version": "0.1.0",
+  "description": "SDK for the MPP32 Machine-Payable API Platform — Solana token intelligence with dual-protocol payments (Tempo + x402 USDC)",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "keywords": [
+    "mpp",
+    "mpp32",
+    "solana",
+    "x402",
+    "machine-payments",
+    "ai-agents",
+    "usdc",
+    "micropayments",
+    "http-402"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "mppx": ">=0.4.0",
+    "viem": ">=2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "mppx": { "optional": true },
+    "viem": { "optional": true }
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0"
+  }
+}

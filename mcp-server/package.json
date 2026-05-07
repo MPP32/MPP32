@@ -1,0 +1,46 @@
+{
+  "name": "mpp32-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for MPP32 — lets AI agents discover and call machine-payable APIs",
+  "type": "module",
+  "bin": {
+    "mpp32-mcp-server": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch"
+  },
+  "keywords": [
+    "mcp",
+    "mpp",
+    "mpp32",
+    "machine-payments",
+    "ai-agents",
+    "claude",
+    "solana",
+    "tempo"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.23.0"
+  },
+  "peerDependencies": {
+    "mppx": ">=0.4.0",
+    "viem": ">=2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "mppx": {
+      "optional": true
+    },
+    "viem": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}

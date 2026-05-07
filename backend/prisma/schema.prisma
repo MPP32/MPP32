@@ -1,0 +1,89 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model ApiRequest {
+  id                 String   @id @default(cuid())
+  requestId          String   @unique
+  submissionSlug     String
+  method             String
+  statusCode         Int
+  latencyMs          Int
+  paymentVerified    Boolean  @default(false)
+  errorCode          String?
+  ipHash             String
+  ap2MandateType     String?
+  ap2MandateVerified Boolean  @default(false)
+  ap2AgentId         String?
+  acpSessionId       String?
+  acpVerified        Boolean  @default(false)
+  agtpIntentMethod   String?
+  agtpAgentCertId    String?
+  agtpVerified       Boolean  @default(false)
+  protocolUsed       String?
+  createdAt          DateTime @default(now())
+
+  @@index([submissionSlug, createdAt])
+  @@index([createdAt])
+  @@index([statusCode])
+  @@index([errorCode])
+  @@index([ap2AgentId])
+  @@index([acpSessionId])
+  @@index([agtpAgentCertId])
+  @@index([protocolUsed])
+}
+
+model Submission {
+  id               String   @id @default(cuid())
+  name             String
+  slug             String   @unique
+  shortDescription String
+  fullDescription  String?
+  category         String
+  websiteUrl       String
+  endpointUrl      String?
+  pricePerQuery    Float?
+  paymentAddress   String?
+  solanaAddress    String?
+  creatorName      String
+  creatorEmail     String
+  logoUrl          String?
+  twitterHandle    String?
+  githubUrl        String?
+  status           String   @default("pending")
+  queryCount       Int      @default(0)
+  lastQueriedAt    DateTime?
+  managementToken  String?
+  recoveryCode     String?
+  recoveryExpiry   DateTime?
+  isDeprecated       Boolean  @default(false)
+  verificationToken  String?
+  isVerified         Boolean  @default(false)
+  verifyFailCount    Int      @default(0)
+  lastVerifiedAt     DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([status, isDeprecated])
+  @@index([category])
+  @@index([status])
+  @@index([creatorEmail])
+}
+
+model ContactMessage {
+  id        String   @id @default(cuid())
+  name      String
+  email     String
+  subject   String
+  message   String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([isRead])
+}

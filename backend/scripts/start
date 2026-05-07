@@ -1,0 +1,42 @@
+#!/bin/bash
+set -o errexit
+set -o nounset
+set -o pipefail
+
+# Load shared environment setup
+source "$(dirname "$0")/env.sh"
+
+# Backup the database before proceeding.
+if [[ "${ENVIRONMENT}" == "production" ]] && [[ -f "${DATABASE_FILE}" ]]; then
+  DATABASE_BACKUP_FILE="${DATABASE_FILE}-$(date +%s)"
+  echo "VACUUM INTO '${DATABASE_BACKUP_FILE}'" | sqlite3 "${DATABASE_FILE}"
+fi
+ 
+
+# Install dependencies
+echo "Installing dependencies..."
+bun install
+
+# Generate Prisma client and push schema if prisma is installed (database-auth skill)
+if [[ -f "prisma/schema.prisma" ]]; then
+  echo "Generating Prisma client..."
+  bunx prisma generate
+  echo "Pushing schema to database..."
+  bunx prisma db push --accept-data-loss
+
+  # Enable DB viewer (idempotent, safe to call multiple times)
+  if [[ -n "${VIBECODE_PROJECT_ID:-}" ]]; then
+    echo "Enabling database viewer..."
+    curl -s -X POST "https://api.vibecodeapp.com/api/projects/${VIBECODE_PROJECT_ID}/cloud/db/enable" || true
+  fi
+fi
+
+# Start server based on environment
+# Use bun directly (not "bun run") so signals propagate correctly
+if [[ "${ENVIRONMENT}" == "production" ]]; then
+  echo "Starting server in production mode..."
+  exec bun src/index.ts
+else
+  echo "Starting server in dev mode with hot reload..."
+  exec bun --hot src/index.ts
+fi
