@@ -1,6 +1,8 @@
 node_modules
+dist
 .DS_Store
 .cache
 *.tsbuildinfo
-coverage
 *.lcov
+coverage
+bun.lock
