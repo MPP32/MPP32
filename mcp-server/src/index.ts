@@ -4,12 +4,175 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-const API_URL = process.env.MPP32_API_URL?.replace(/\/$/, "") || "https://mpp32.org";
-const PRIVATE_KEY = process.env.MPP32_PRIVATE_KEY;
-const SOLANA_PRIVATE_KEY = process.env.MPP32_SOLANA_PRIVATE_KEY;
-// MPP32_AGENT_KEY is the canonical name; MPP32_API_KEY is accepted as an alias
-// because earlier docs used that name.
-const AGENT_KEY = process.env.MPP32_AGENT_KEY ?? process.env.MPP32_API_KEY;
+const SERVER_VERSION = "1.1.2";
+
+// ── Env loading: trim and sanitize aggressively ─────────────────────────────
+// Copy-paste from Claude Desktop / Cursor / Windsurf JSON config UIs frequently
+// adds trailing \n, \r, NBSP, BOM, or wraps the value in literal quotes. Any
+// non-ASCII byte (including a stray newline) in a value that ends up in an
+// HTTP header makes Node's undici fetch throw ERR_INVALID_CHAR, which used to
+// surface as a confusing "invalid byte character" error on every catalog call.
+function readEnv(name: string): string | undefined {
+  const raw = process.env[name];
+  if (raw === undefined) return undefined;
+  let v = raw;
+  if (v.charCodeAt(0) === 0xfeff) v = v.slice(1);
+  v = v.trim();
+  if (
+    v.length >= 2 &&
+    ((v.startsWith('"') && v.endsWith('"')) ||
+      (v.startsWith("'") && v.endsWith("'")))
+  ) {
+    v = v.slice(1, -1).trim();
+  }
+  if (v.length === 0) return undefined;
+  return v;
+}
+
+function isPrintableAscii(v: string): boolean {
+  for (let i = 0; i < v.length; i++) {
+    const c = v.charCodeAt(i);
+    if (c < 0x20 || c > 0x7e) return false;
+  }
+  return true;
+}
+
+function safeHeaderValue(name: string, value: string): string {
+  if (!isPrintableAscii(value)) {
+    throw new Error(
+      `Environment variable contains non-printable or non-ASCII characters that cannot be sent as an HTTP header (${name}). ` +
+        `Re-copy the value from https://mpp32.org/agent-console without any surrounding whitespace, quotes, or newlines.`,
+    );
+  }
+  return value;
+}
+
+function describeEnvProblem(name: string, raw: string, expected: string): string {
+  const hex = Array.from(raw.slice(0, 4))
+    .map((c) => c.charCodeAt(0).toString(16).padStart(2, "0"))
+    .join(" ");
+  return `${name} looks malformed. Expected ${expected}. First bytes: 0x${hex}. Re-copy from ${API_URL}/agent-console.`;
+}
+
+const RAW_API_URL = readEnv("MPP32_API_URL") ?? "https://mpp32.org";
+const API_URL = (() => {
+  try {
+    const u = new URL(RAW_API_URL.replace(/\/+$/, ""));
+    if (u.protocol !== "https:" && u.protocol !== "http:") {
+      throw new Error(`MPP32_API_URL must be http(s), got ${u.protocol}`);
+    }
+    return u.toString().replace(/\/+$/, "");
+  } catch (err) {
+    console.error(
+      `[mpp32] MPP32_API_URL is not a valid URL: ${err instanceof Error ? err.message : String(err)}. ` +
+        `Falling back to https://mpp32.org.`,
+    );
+    return "https://mpp32.org";
+  }
+})();
+
+// Default request timeout. Configurable via MPP32_TIMEOUT_MS.
+const TIMEOUT_MS = (() => {
+  const raw = readEnv("MPP32_TIMEOUT_MS");
+  if (!raw) return 30_000;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 1_000 || n > 300_000) {
+    console.error(`[mpp32] MPP32_TIMEOUT_MS=${raw} out of range. Using 30000ms.`);
+    return 30_000;
+  }
+  return n;
+})();
+
+// MPP32_AGENT_KEY is canonical; MPP32_API_KEY is an accepted alias from older docs.
+const AGENT_KEY: string | undefined = (() => {
+  const v = readEnv("MPP32_AGENT_KEY") ?? readEnv("MPP32_API_KEY");
+  if (!v) return undefined;
+  if (!isPrintableAscii(v)) {
+    console.error(
+      `[mpp32] MPP32_AGENT_KEY contains non-ASCII characters and will be ignored. ` +
+        `Re-copy the key from ${API_URL}/agent-console.`,
+    );
+    return undefined;
+  }
+  if (!/^mpp32_agent_[A-Za-z0-9_-]+$/.test(v)) {
+    console.error(
+      `[mpp32] ${describeEnvProblem("MPP32_AGENT_KEY", v, "a value starting with 'mpp32_agent_'")}`,
+    );
+  }
+  return v;
+})();
+
+const PRIVATE_KEY: string | undefined = (() => {
+  const v = readEnv("MPP32_PRIVATE_KEY");
+  if (!v) return undefined;
+  if (!isPrintableAscii(v)) {
+    console.error(
+      `[mpp32] MPP32_PRIVATE_KEY contains non-ASCII characters and will be ignored. ` +
+        `Re-paste the hex key (0x-prefixed or 64 hex chars).`,
+    );
+    return undefined;
+  }
+  if (!/^(0x)?[0-9a-fA-F]{64}$/.test(v)) {
+    console.error(
+      `[mpp32] ${describeEnvProblem("MPP32_PRIVATE_KEY", v, "0x-prefixed 64-hex-char EVM private key")}`,
+    );
+  }
+  return v;
+})();
+
+const SOLANA_PRIVATE_KEY: string | undefined = (() => {
+  const v = readEnv("MPP32_SOLANA_PRIVATE_KEY");
+  if (!v) return undefined;
+  if (!isPrintableAscii(v)) {
+    console.error(
+      `[mpp32] MPP32_SOLANA_PRIVATE_KEY contains non-ASCII characters and will be ignored. ` +
+        `Re-paste the base58 (or [byte,byte,...] array, or hex) key.`,
+    );
+    return undefined;
+  }
+  const looksValid =
+    v.startsWith("[") ||
+    /^[0-9a-fA-F]+$/.test(v) ||
+    /^[1-9A-HJ-NP-Za-km-z]{43,90}$/.test(v); // base58
+  if (!looksValid) {
+    console.error(
+      `[mpp32] ${describeEnvProblem("MPP32_SOLANA_PRIVATE_KEY", v, "base58 string, hex string, or [byte,byte,...] array")}`,
+    );
+  }
+  return v;
+})();
+
+// Wrap fetch with a default timeout. AbortSignal.timeout exists in Node 20+,
+// but we ship for Node 18+, so we build the signal ourselves.
+async function fetchWithTimeout(
+  url: string,
+  init?: RequestInit & { timeoutMs?: number },
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), init?.timeoutMs ?? TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error(
+        `Request to ${url} timed out after ${init?.timeoutMs ?? TIMEOUT_MS}ms. ` +
+          `Set MPP32_TIMEOUT_MS in your MCP config to extend.`,
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Lowercase all keys in a headers-like object. The backend may emit
+// "Payment-Required" or "payment-required"; downstream code must not care.
+function lowercaseHeaderKeys(obj: Record<string, string> | undefined): Record<string, string> {
+  if (!obj) return {};
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(obj)) out[k.toLowerCase()] = v;
+  return out;
+}
 
 interface FederatedService {
   slug: string;
@@ -64,12 +227,17 @@ interface ExecuteResponse {
 
 const server = new McpServer({
   name: "mpp32",
-  version: "1.1.0",
+  version: SERVER_VERSION,
 });
 
 function buildHeaders(extra: Record<string, string> = {}): Record<string, string> {
-  const headers: Record<string, string> = { ...extra };
-  if (AGENT_KEY) headers["X-Agent-Key"] = AGENT_KEY;
+  const headers: Record<string, string> = {};
+  for (const [k, v] of Object.entries(extra)) {
+    headers[k] = safeHeaderValue(k, v);
+  }
+  if (AGENT_KEY) {
+    headers["X-Agent-Key"] = safeHeaderValue("MPP32_AGENT_KEY", AGENT_KEY);
+  }
   return headers;
 }
 
@@ -119,7 +287,7 @@ server.tool(
       if (source) url.searchParams.set("source", source);
       url.searchParams.set("limit", String(limit ?? 100));
 
-      const res = await fetch(url.toString(), { headers: buildHeaders() });
+      const res = await fetchWithTimeout(url.toString(), { headers: buildHeaders() });
       if (!res.ok) {
         return {
           content: [
@@ -291,7 +459,7 @@ async function callViaAgentExecute(
     });
 
     // Round 1: no payment headers
-    const firstRes = await fetch(execUrl, {
+    const firstRes = await fetchWithTimeout(execUrl, {
       method: "POST",
       headers: buildHeaders({ "Content-Type": "application/json" }),
       body: reqBody,
@@ -341,7 +509,7 @@ function detectPaymentRequired(resp: ExecuteResponse): PaymentChallenge | null {
     | { error?: { code?: string; challenge?: { headers?: Record<string, string>; priceQuoted?: number } } }
     | undefined;
   if (!result?.error || result.error.code !== "PAYMENT_REQUIRED") return null;
-  const headers = result.error.challenge?.headers ?? {};
+  const headers = lowercaseHeaderKeys(result.error.challenge?.headers);
   return {
     wwwAuthenticate: headers["www-authenticate"],
     paymentRequired: headers["payment-required"],
@@ -422,7 +590,7 @@ async function signAndRetry(
   }
 
   // Round 2: with payment headers
-  const secondRes = await fetch(execUrl, {
+  const secondRes = await fetchWithTimeout(execUrl, {
     method: "POST",
     headers: buildHeaders({ "Content-Type": "application/json", ...paymentHeaders }),
     body: reqBody,
@@ -563,7 +731,9 @@ function paymentKeyMissingMessage(
           '      "command": "npx",',
           '      "args": ["mpp32-mcp-server"],',
           '      "env": {',
-          AGENT_KEY ? `        "MPP32_AGENT_KEY": "${AGENT_KEY.slice(0, 12)}…",` : "",
+          AGENT_KEY
+            ? `        "MPP32_AGENT_KEY": "${AGENT_KEY.slice(0, 12).replace(/[^A-Za-z0-9_-]/g, "?")}…",`
+            : "",
           '        "MPP32_SOLANA_PRIVATE_KEY": "<solana-base58-key for USDC>",',
           '        "MPP32_PRIVATE_KEY": "<EVM-hex-key for pathUSD>"',
           "      }",
@@ -615,7 +785,7 @@ async function callViaLegacyProxy(
   // Without an agent key, only native /api/proxy/<slug> is reachable.
   // We fetch /info first to detect that the slug exists as a native service.
   const infoUrl = new URL(`/api/proxy/${encodeURIComponent(slug)}/info`, API_URL).toString();
-  const infoRes = await fetch(infoUrl);
+  const infoRes = await fetchWithTimeout(infoUrl);
   if (!infoRes.ok) {
     return {
       content: [
@@ -638,7 +808,7 @@ async function callViaLegacyProxy(
   const baseHeaders: Record<string, string> = { Accept: "application/json" };
   if (body !== undefined) baseHeaders["Content-Type"] = "application/json";
 
-  const challengeRes = await fetch(proxyUrl.toString(), {
+  const challengeRes = await fetchWithTimeout(proxyUrl.toString(), {
     method,
     headers: baseHeaders,
     body: method !== "GET" && body !== undefined ? JSON.stringify(body) : undefined,
@@ -728,7 +898,7 @@ async function callViaLegacyProxy(
     };
   }
 
-  const paidRes = await fetch(proxyUrl.toString(), {
+  const paidRes = await fetchWithTimeout(proxyUrl.toString(), {
     method,
     headers: { ...baseHeaders, ...paymentHeaders },
     body: method !== "GET" && body !== undefined ? JSON.stringify(body) : undefined,
@@ -766,9 +936,22 @@ async function legacyIntelligenceCall(
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
  try {
   const reqHeaders: Record<string, string> = { "Content-Type": "application/json" };
-  if (walletAddress) reqHeaders["X-Wallet-Address"] = walletAddress;
+  if (walletAddress) {
+    const trimmed = walletAddress.trim();
+    if (!isPrintableAscii(trimmed)) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `walletAddress contains non-ASCII characters. Pass a Solana base58 address only.`,
+          },
+        ],
+      };
+    }
+    reqHeaders["X-Wallet-Address"] = trimmed;
+  }
 
-  const res = await fetch(`${API_URL}/api/intelligence`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/intelligence`, {
     method: "POST",
     headers: reqHeaders,
     body: JSON.stringify({ token }),
@@ -860,7 +1043,7 @@ async function legacyIntelligenceCall(
     }
   }
 
-  const paidRes = await fetch(`${API_URL}/api/intelligence`, {
+  const paidRes = await fetchWithTimeout(`${API_URL}/api/intelligence`, {
     method: "POST",
     headers: { ...reqHeaders, ...paymentHeaders },
     body: JSON.stringify({ token }),
@@ -904,13 +1087,18 @@ interface ChallengeParams {
 function parseWwwAuthenticate(header: string): ChallengeParams {
   const match = header.match(/^(\w+)\s+(.+)$/);
   if (!match) return { scheme: null, params: {} };
-  const scheme = match[1];
-  const rest = match[2];
+  const scheme = match[1] ?? null;
+  const rest = match[2] ?? "";
   const params: Record<string, string> = {};
-  const paramRegex = /(\w+)=(?:"([^"]*)"|([\w.+/=-]+))/g;
+  // Tokens per RFC 7235: quoted-string OR a token68-ish value covering all
+  // base64url, base58, hex, JSON-pointers, etc. Liberal on purpose so we do
+  // not silently drop valid challenges.
+  const paramRegex = /([A-Za-z0-9_-]+)=(?:"((?:[^"\\]|\\.)*)"|([^\s,]+))/g;
   let m: RegExpExecArray | null;
   while ((m = paramRegex.exec(rest)) !== null) {
-    params[m[1]] = m[2] ?? m[3];
+    const key = m[1];
+    const val = m[2] ?? m[3];
+    if (key && val !== undefined) params[key] = val;
   }
   return { scheme, params };
 }
@@ -1030,8 +1218,16 @@ async function completeX402Payment(
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  const keyHint = AGENT_KEY ? "agent-key configured" : "no agent-key (legacy mode)";
-  console.error(`MPP32 MCP server v1.1.1 running on stdio. ${keyHint}`);
+  const features = [
+    AGENT_KEY ? "agent-key" : null,
+    SOLANA_PRIVATE_KEY ? "x402-key" : null,
+    PRIVATE_KEY ? "tempo-key" : null,
+  ]
+    .filter(Boolean)
+    .join(", ") || "no keys (catalog-only legacy mode)";
+  console.error(
+    `[mpp32] MCP server v${SERVER_VERSION} on stdio. API ${API_URL}. Configured: ${features}. Timeout ${TIMEOUT_MS}ms.`,
+  );
 }
 
 main().catch((err) => {

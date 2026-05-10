@@ -1,6 +1,6 @@
 {
   "name": "mpp32-mcp-server",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "mcpName": "io.github.MPP32/mpp32-mcp-server",
   "description": "Payment layer for AI agents. One MCP, five protocols, thousands of paid APIs your agent can call.",
   "type": "module",
@@ -19,6 +19,7 @@
     "dist/**/*.js",
     "dist/**/*.d.ts",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "sideEffects": false,
