@@ -37,7 +37,11 @@ import { getM32Balance, calculateDiscount } from './solana-token.js'
 // ---- MPP Payment Config ----
 
 const secretKey = env.MPP_SECRET_KEY ?? (() => {
-  console.warn('[mpp] MPP_SECRET_KEY not set — using insecure default. Set this in production!')
+  if (env.NODE_ENV === 'production') {
+    console.error('[mpp] FATAL: MPP_SECRET_KEY is required in production but is not set. Refusing to start.')
+    process.exit(1)
+  }
+  console.warn('[mpp] MPP_SECRET_KEY not set — using insecure development fallback. NEVER deploy this way.')
   return 'mpp-default-secret-change-in-production'
 })()
 

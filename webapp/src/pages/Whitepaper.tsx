@@ -273,7 +273,7 @@ X-AGTP-Supported: true`}</CodeBlock>
                 An agent configured with the MPP32 MCP server and a funded wallet (EVM for Tempo or Solana for x402) can discover, evaluate, and pay for any service in the ecosystem without human intervention. The agent's wallet serves as its identity. No API keys are issued, no accounts are created, and no credentials are stored.
               </p>
               <p>
-                The MCP server is available as an npm package. Configuration requires adding the server to the agent's MCP configuration with the appropriate private key environment variable:
+                The MCP server is available as an npm package. Configuration requires adding the server to the agent's MCP configuration. The recommended setup includes an <code className="font-mono text-xs text-mpp-amber">MPP32_AGENT_KEY</code> (free, no signup, generated at mpp32.org/agent-console) plus optional payment keys for paid services:
               </p>
               <CodeBlock>{`{
   "mcpServers": {
@@ -281,14 +281,15 @@ X-AGTP-Supported: true`}</CodeBlock>
       "command": "npx",
       "args": ["mpp32-mcp-server"],
       "env": {
-        "MPP32_PRIVATE_KEY": "your_evm_private_key",
-        "MPP32_SOLANA_PRIVATE_KEY": "your_solana_private_key"
+        "MPP32_AGENT_KEY": "mpp32_agent_…",
+        "MPP32_PRIVATE_KEY": "your_evm_private_key (optional)",
+        "MPP32_SOLANA_PRIVATE_KEY": "your_solana_private_key (optional)"
       }
     }
   }
 }`}</CodeBlock>
               <p>
-                Either key is sufficient. If both are provided, the server selects the appropriate protocol based on the 402 response headers from each service.
+                The agent key attributes every call to the user's dashboard for spend and protocol analytics. Either payment key is sufficient for paid services. Free curated services (DexScreener, Jupiter price, CoinGecko ping, httpbin) work without any payment key. If both payment keys are provided, x402 is preferred and Tempo is used as a fallback.
               </p>
             </Section>
 

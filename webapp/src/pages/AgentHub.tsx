@@ -205,11 +205,14 @@ const result = await fetch('https://mpp32.org/api/agent/execute', {
       "command": "npx",
       "args": ["mpp32-mcp-server"],
       "env": {
-        "MPP32_SOLANA_PRIVATE_KEY": "your-key"
+        "MPP32_AGENT_KEY": "mpp32_agent_…",
+        "MPP32_SOLANA_PRIVATE_KEY": "your-solana-key (optional, for paid services)"
       }
     }
   }
-}`,
+}
+// Get MPP32_AGENT_KEY at mpp32.org/agent-console — every call shows up
+// in your dashboard. SOLANA key is only needed for paid services.`,
 };
 
 type CodeTab = keyof typeof codeExamples;

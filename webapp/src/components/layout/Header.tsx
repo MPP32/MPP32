@@ -15,7 +15,7 @@ const navLinks = [
   { label: "Pricing", href: "/pricing" },
 ];
 
-const GECKO_URL = "https://www.geckoterminal.com/solana/pools/5hCoPUqEoYaiReGeQvm9hDkgxyhWute8D1VhaHvcLtXs";
+const DEX_URL = "https://dexscreener.com/solana/5hcopuqeoyairegeqvm9hdkgxyhwute8d1vhahvcltxs";
 
 export function Header() {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -59,13 +59,13 @@ export function Header() {
           {/* Desktop CTA */}
           <div className="hidden md:flex items-center gap-3">
             <a
-              href={GECKO_URL}
+              href={DEX_URL}
               target="_blank"
               rel="noopener noreferrer"
-              title="View on GeckoTerminal"
+              title="View on Dexscreener"
               className="flex items-center opacity-50 hover:opacity-100 transition-opacity"
             >
-              <img src="https://www.geckoterminal.com/favicon.ico" alt="GeckoTerminal" width={22} height={22} className="rounded-sm" />
+              <img src="https://dexscreener.com/favicon.png" alt="Dexscreener" width={22} height={22} className="rounded-sm" />
             </a>
             <Link to="/agent-console">
               <span className="text-sm text-muted-foreground hover:text-foreground transition-colors cursor-pointer">
@@ -120,14 +120,14 @@ export function Header() {
               <ChevronRight className="w-4 h-4 text-muted-foreground" />
             </Link>
             <a
-              href={GECKO_URL}
+              href={DEX_URL}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center justify-between py-2.5 text-sm border-b border-mpp-border/50 text-muted-foreground hover:text-foreground transition-colors"
             >
               <span className="flex items-center gap-2.5">
-                <img src="https://www.geckoterminal.com/favicon.ico" alt="" width={18} height={18} className="rounded-sm" />
-                GeckoTerminal
+                <img src="https://dexscreener.com/favicon.png" alt="" width={18} height={18} className="rounded-sm" />
+                Dexscreener
               </span>
               <ExternalLink className="w-3.5 h-3.5 text-muted-foreground" />
             </a>

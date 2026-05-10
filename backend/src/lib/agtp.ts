@@ -80,21 +80,24 @@ export function createAGTPChallenge(resource: string): string {
   return Buffer.from(JSON.stringify(challenge)).toString('base64')
 }
 
+// Server-side salt for AGTP agent-key derivation. The previous version used a
+// fixed string literal as the HMAC key, which meant anyone could compute the
+// "agent secret" from a public agent-id and forge signatures. We now mix in
+// MPP_SECRET_KEY so the derivation requires a server-held secret.
+const AGTP_KEY_SALT = `agtp-v1:${env.MPP_SECRET_KEY ?? 'mpp-default-secret-change-in-production'}`
+
 function verifySignature(agentId: string, signature: string, timestamp: string, method: string, path: string): boolean {
   // The signing input is deterministic: agentId:METHOD:path:timestamp
   const signingInput = `${agentId}:${method}:${path}:${timestamp}`
 
-  // Try HMAC-SHA256 verification: signature = HMAC(signingInput, agentSecret)
-  // The agent's secret is the agentId itself hashed — this is a basic trust model
-  // where agents prove they know their own ID by producing a valid HMAC.
-  // For production, agents would register their HMAC keys.
   try {
     const decoded = Buffer.from(signature, 'base64')
     if (decoded.length < 32) return false
 
-    // Verify the HMAC was produced with a key derived from the agent ID
-    // Agent computes: HMAC-SHA256(signingInput, SHA256(agentId))
-    const agentKey = createHmac('sha256', 'mpp32-agtp-v1').update(agentId).digest()
+    // Derive the per-agent HMAC key from the agentId AND a server-held salt.
+    // Without the salt an attacker who knows only the (public) agent id could
+    // produce valid signatures. With the salt they also need the server secret.
+    const agentKey = createHmac('sha256', AGTP_KEY_SALT).update(agentId).digest()
     const expected = createHmac('sha256', agentKey).update(signingInput).digest()
 
     if (decoded.length !== expected.length) return false

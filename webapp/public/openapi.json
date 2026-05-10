@@ -9,7 +9,9 @@
   },
   "x-service-info": {
     "categories": ["data", "crypto", "intelligence", "proxy"],
-    "documentation": "https://mpp32.org/api/submissions"
+    "documentation": "https://mpp32.org/docs",
+    "federatedCatalog": "https://mpp32.org/api/agent/services",
+    "agentExecute": "https://mpp32.org/api/agent/execute"
   },
   "servers": [
     { "url": "https://mpp32.org" }

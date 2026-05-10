@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
+import { createHash } from 'crypto'
 import { prisma } from '../lib/db.js'
 import { rateLimit, rateLimitByKey, logger } from '../lib/mpp.js'
 import {
@@ -10,6 +11,7 @@ import {
   type ProtocolId,
 } from '../lib/agent-router.js'
 import { getM32Balance, calculateDiscount, type DiscountResult } from '../lib/solana-token.js'
+import { checkUrlForSsrf } from '../lib/ssrf.js'
 import { env } from '../env.js'
 
 const agentRouter = new Hono()
@@ -99,7 +101,10 @@ agentRouter.post('/sessions', async (c) => {
 
   const { agentId, agentName, walletAddress, preferredProtocol } = parsed.data
 
+  // Plaintext API key is returned to the caller exactly once and never stored.
+  // We persist only the sha256 hash so a database leak does not yield live keys.
   const apiKey = `mpp32_agent_${crypto.randomUUID().replace(/-/g, '')}`
+  const apiKeyHash = createHash('sha256').update(apiKey).digest('hex')
 
   const session = await prisma.agentSession.create({
     data: {
@@ -108,7 +113,7 @@ agentRouter.post('/sessions', async (c) => {
       walletAddress: walletAddress ?? null,
       walletVerified: false,
       preferredProtocol: preferredProtocol ?? null,
-      apiKey,
+      apiKey: apiKeyHash,
       expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
     },
   })
@@ -284,7 +289,8 @@ agentRouter.post('/execute', rateLimitByKey({ name: 'agent-execute', max: 120, w
     return c.json({ error: { message: 'Missing X-Agent-Key header. Create a session first via POST /api/agent/sessions', code: 'AUTH_REQUIRED' } }, 401)
   }
 
-  const session = await prisma.agentSession.findUnique({ where: { apiKey: agentKey } })
+  const agentKeyHash = createHash('sha256').update(agentKey).digest('hex')
+  const session = await prisma.agentSession.findUnique({ where: { apiKey: agentKeyHash } })
   if (!session || !session.isActive) {
     return c.json({ error: { message: 'Invalid or inactive session', code: 'INVALID_SESSION' } }, 401)
   }
@@ -426,7 +432,17 @@ agentRouter.post('/execute', rateLimitByKey({ name: 'agent-execute', max: 120, w
       targetUrlString = url.toString()
     } else {
       if (!submission.endpointUrl) throw new Error('Service endpoint not configured')
-      const url = new URL(submission.endpointUrl)
+      // SSRF guard: external URLs from the federated catalog could resolve to
+      // private/loopback/metadata addresses. Refuse upfront — we never want
+      // our backend hitting 169.254.x or RFC1918 ranges on a third party's behalf.
+      const ssrf = checkUrlForSsrf(submission.endpointUrl)
+      if (!ssrf.ok) {
+        return c.json(
+          { error: { message: `External endpoint blocked: ${ssrf.reason}`, code: 'ENDPOINT_BLOCKED' } },
+          400,
+        )
+      }
+      const url = ssrf.parsedUrl!
       if (query) {
         for (const [k, v] of Object.entries(query)) url.searchParams.set(k, String(v))
       }

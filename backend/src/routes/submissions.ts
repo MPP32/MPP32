@@ -8,6 +8,8 @@ import { validate } from '../lib/validator.js'
 import { logger, rateLimit, verifyAdminSecret } from '../lib/mpp.js'
 import { prisma } from '../lib/db.js'
 import { checkVerificationToken } from '../lib/verification.js'
+import { checkUrlForSsrf } from '../lib/ssrf.js'
+import { env } from '../env.js'
 
 const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null
 
@@ -98,6 +100,17 @@ async function verifyManagementAuth(
 }
 
 async function probeEndpoint(url: string): Promise<{ ok: true } | { ok: false; message: string }> {
+  // Block private/loopback/metadata IPs at registration time. Without this a
+  // malicious provider could register e.g. http://169.254.169.254/... and
+  // get our backend to fetch from cloud metadata services.
+  const ssrf = checkUrlForSsrf(url)
+  if (!ssrf.ok) {
+    return { ok: false, message: `Endpoint URL rejected: ${ssrf.reason}. Use a publicly reachable HTTPS URL.` }
+  }
+  if (ssrf.parsedUrl?.protocol !== 'https:') {
+    return { ok: false, message: 'Endpoint URL must use HTTPS.' }
+  }
+
   try {
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), 8000)
@@ -167,8 +180,13 @@ submissionsRouter.get('/stats', async (c) => {
   return c.json({ data: { total: submissions.length, categories } })
 })
 
+// Per-IP rate limit on every /admin route. Even though these require MPP_SECRET_KEY,
+// the limiter caps brute-force attempts on the admin secret and prevents accidental
+// abuse from an automation loop with a wrong key.
+const adminRateLimit = rateLimit({ name: 'admin', max: 20, windowMs: 60_000 })
+
 // Admin: hard-delete a submission by slug (requires MPP_SECRET_KEY)
-submissionsRouter.delete('/admin/:slug', async (c) => {
+submissionsRouter.delete('/admin/:slug', adminRateLimit, async (c) => {
   const secret = c.req.header('x-admin-key')
   if (!verifyAdminSecret(secret)) {
     return c.json({ error: { message: 'Forbidden', code: 'FORBIDDEN' } }, 403)
@@ -184,7 +202,7 @@ submissionsRouter.delete('/admin/:slug', async (c) => {
 })
 
 // Admin: clear all submissions (requires MPP_SECRET_KEY)
-submissionsRouter.post('/admin/reset', async (c) => {
+submissionsRouter.post('/admin/reset', adminRateLimit, async (c) => {
   const secret = c.req.header('x-admin-key')
   if (!verifyAdminSecret(secret)) {
     return c.json({ error: { message: 'Forbidden', code: 'FORBIDDEN' } }, 403)
@@ -197,7 +215,7 @@ submissionsRouter.post('/admin/reset', async (c) => {
 })
 
 // Admin: recover management token directly (requires MPP_SECRET_KEY)
-submissionsRouter.post('/admin/:slug/recover', async (c) => {
+submissionsRouter.post('/admin/:slug/recover', adminRateLimit, async (c) => {
   const secret = c.req.header('x-admin-key')
   if (!verifyAdminSecret(secret)) {
     return c.json({ error: { message: 'Forbidden', code: 'FORBIDDEN' } }, 403)
@@ -222,7 +240,7 @@ submissionsRouter.post('/admin/:slug/recover', async (c) => {
 })
 
 // Admin: set submission status (requires MPP_SECRET_KEY)
-submissionsRouter.post('/admin/:slug/approve', async (c) => {
+submissionsRouter.post('/admin/:slug/approve', adminRateLimit, async (c) => {
   const secret = c.req.header('x-admin-key')
   if (!verifyAdminSecret(secret)) {
     return c.json({ error: { message: 'Forbidden', code: 'FORBIDDEN' } }, 403)
@@ -399,6 +417,22 @@ submissionsRouter.post(
       )
     }
 
+    // Refuse to issue an OTP in production unless we can actually email it.
+    // The previous DEV-FALLBACK path logged the plaintext OTP to server stdout,
+    // which is unsafe with shared log aggregation in prod.
+    if (!resend && env.NODE_ENV === 'production') {
+      logger.error('Recovery requested in production but RESEND_API_KEY is not configured', { slug })
+      return c.json(
+        {
+          error: {
+            message: 'Email delivery is not configured on this server. Contact support for manual recovery.',
+            code: 'EMAIL_UNAVAILABLE',
+          },
+        },
+        503,
+      )
+    }
+
     const otpBytes = new Uint32Array(1)
     crypto.getRandomValues(otpBytes)
     const otp = String(100000 + (otpBytes[0]! % 900000))
@@ -443,13 +477,20 @@ submissionsRouter.post(
       }
       if (!sent) {
         logger.error('All email senders failed', { slug, to: submission.creatorEmail })
+        // Invalidate the stored OTP so a future successful request gets a fresh code.
+        await prisma.submission.update({
+          where: { slug },
+          data: { recoveryCode: null, recoveryExpiry: null },
+        })
         return c.json(
           { error: { message: 'Email delivery is temporarily unavailable. Contact support for manual recovery.', code: 'EMAIL_FAILED' } },
           503
         )
       }
     } else {
-      logger.info('DEV FALLBACK — OTP generated', { slug, otp })
+      // Dev-only fallback: log to stdout. The production check above ensures we
+      // never reach this branch with NODE_ENV=production.
+      logger.warn('DEV FALLBACK — OTP not emailed (RESEND_API_KEY missing). Plaintext OTP in logs.', { slug, otp })
     }
 
     return c.json({ data: { message: 'Verification code sent to your email' } })

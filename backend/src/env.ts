@@ -27,12 +27,66 @@ const envSchema = z.object({
   CONTACT_NOTIFY_EMAIL: z.string().email().optional(),
 });
 
+// Known committed/example secret values that MUST be rotated before production.
+// If any of these are seen with NODE_ENV=production we refuse to boot.
+const INSECURE_COMMITTED_SECRETS = new Set<string>([
+  "a2f9c468167f264b43f2f23496d4929354b17cca890887e257e3941e14f8161b",
+  "mpp-default-secret-change-in-production",
+  "change-me",
+  "dev",
+  "development",
+  "test",
+]);
+
 /**
  * Validate and parse environment variables
  */
 function validateEnv() {
   try {
     const parsed = envSchema.parse(process.env);
+
+    const isProduction = parsed.NODE_ENV === "production";
+    const fatalErrors: string[] = [];
+    const warnings: string[] = [];
+
+    if (isProduction) {
+      if (!parsed.MPP_SECRET_KEY) {
+        fatalErrors.push(
+          "MPP_SECRET_KEY is required in production. Generate with: openssl rand -hex 32",
+        );
+      } else if (INSECURE_COMMITTED_SECRETS.has(parsed.MPP_SECRET_KEY)) {
+        fatalErrors.push(
+          "MPP_SECRET_KEY matches a known committed/example value. Rotate it before deploying. Generate with: openssl rand -hex 32",
+        );
+      }
+
+      if (!parsed.RESEND_API_KEY) {
+        warnings.push(
+          "RESEND_API_KEY is missing. Email delivery will fail and recovery codes will NOT be logged in production.",
+        );
+      }
+
+      if (!parsed.BACKEND_URL) {
+        warnings.push("BACKEND_URL is not set. Webhooks and absolute URLs may default to localhost.");
+      }
+    } else if (parsed.MPP_SECRET_KEY && INSECURE_COMMITTED_SECRETS.has(parsed.MPP_SECRET_KEY)) {
+      warnings.push(
+        "MPP_SECRET_KEY is the default committed value — fine in dev, but rotate it before deploying to production.",
+      );
+    } else if (!parsed.MPP_SECRET_KEY) {
+      warnings.push("MPP_SECRET_KEY is not set — using a development fallback. Set this in production.");
+    }
+
+    if (warnings.length) {
+      for (const w of warnings) console.warn(`⚠️  ${w}`);
+    }
+
+    if (fatalErrors.length) {
+      console.error("❌ Production environment validation failed:");
+      for (const err of fatalErrors) console.error(`  - ${err}`);
+      process.exit(1);
+    }
+
     console.log("✅ Environment variables validated successfully");
     return parsed;
   } catch (error) {

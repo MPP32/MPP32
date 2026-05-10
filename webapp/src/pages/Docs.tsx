@@ -980,12 +980,16 @@ export const tokenIntelligenceTool = tool(
       "command": "npx",
       "args": ["mpp32-mcp-server"],
       "env": {
-        "MPP32_PRIVATE_KEY": "your-tempo-private-key",
-        "MPP32_SOLANA_PRIVATE_KEY": "your-solana-private-key"
+        "MPP32_AGENT_KEY": "mpp32_agent_…",
+        "MPP32_SOLANA_PRIVATE_KEY": "your-solana-private-key (optional, for paid services)",
+        "MPP32_PRIVATE_KEY": "your-tempo-private-key (optional, for paid services)"
       }
     }
   }
-}`}</pre>
+}
+// Get MPP32_AGENT_KEY at mpp32.org/agent-console — every call is then
+// attributed to your dashboard. Free curated services (DexScreener,
+// Jupiter price, CoinGecko ping, httpbin) work without any payment key.`}</pre>
             </div>
           </section>
 
@@ -1107,14 +1111,19 @@ Agent: I'll query the intelligence endpoint for BONK.
                 </thead>
                 <tbody className="divide-y divide-mpp-border">
                   <tr>
-                    <td className="px-5 py-3 font-mono text-mpp-amber text-xs">MPP32_PRIVATE_KEY</td>
-                    <td className="px-5 py-3 text-foreground text-sm">One required</td>
-                    <td className="px-5 py-3 text-muted-foreground text-xs">EVM-compatible private key for Tempo payments (pathUSD). At least one private key is required across the supported protocols.</td>
+                    <td className="px-5 py-3 font-mono text-mpp-amber text-xs">MPP32_AGENT_KEY</td>
+                    <td className="px-5 py-3 text-foreground text-sm">Recommended</td>
+                    <td className="px-5 py-3 text-muted-foreground text-xs">Session API key (mpp32_agent_*) generated at mpp32.org/agent-console. Attributes every call to your dashboard for spend, success rate, and protocol breakdown. Without it the MCP still works but calls are anonymous and only native services are reachable. Also accepted as MPP32_API_KEY.</td>
                   </tr>
                   <tr>
                     <td className="px-5 py-3 font-mono text-mpp-amber text-xs">MPP32_SOLANA_PRIVATE_KEY</td>
-                    <td className="px-5 py-3 text-foreground text-sm">One required</td>
-                    <td className="px-5 py-3 text-muted-foreground text-xs">Solana wallet private key for x402 USDC payments. Required if using x402 instead of or alongside Tempo.</td>
+                    <td className="px-5 py-3 text-foreground text-sm">For paid services</td>
+                    <td className="px-5 py-3 text-muted-foreground text-xs">Solana wallet private key for x402 USDC payments. Preferred protocol when both this and MPP32_PRIVATE_KEY are set. Free services do not require a payment key.</td>
+                  </tr>
+                  <tr>
+                    <td className="px-5 py-3 font-mono text-mpp-amber text-xs">MPP32_PRIVATE_KEY</td>
+                    <td className="px-5 py-3 text-foreground text-sm">For paid services</td>
+                    <td className="px-5 py-3 text-muted-foreground text-xs">EVM-compatible private key for Tempo payments (pathUSD). Used as a fallback when x402 is unavailable.</td>
                   </tr>
                   <tr>
                     <td className="px-5 py-3 font-mono text-mpp-amber text-xs">MPP32_API_URL</td>

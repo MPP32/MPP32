@@ -1,100 +1,152 @@
 # MPP32
 
-Universal payment proxy for API providers and AI agents.
+**The payment layer for AI agents.** One install. Five payment rails. Thousands of paid APIs your agent can reach without you setting up a single account.
 
-API providers register once. AI agents pay using any of 5 protocols. MPP32 sits in between: it verifies payments, translates between protocols, and routes revenue directly to the provider's wallet. The provider's real endpoint stays private behind the proxy.
+[![npm version](https://img.shields.io/npm/v/mpp32-mcp-server.svg?style=flat-square&color=0052FF)](https://www.npmjs.com/package/mpp32-mcp-server)
+[![License: MIT](https://img.shields.io/badge/License-MIT-0052FF.svg?style=flat-square)](https://opensource.org/licenses/MIT)
+[![Website](https://img.shields.io/badge/Website-mpp32.org-0052FF?style=flat-square)](https://mpp32.org)
 
-## Protocols
+## Why this exists
 
-MPP32 verifies and routes payments across all five major agent payment protocols:
+Most agent stacks stop at "the model can call a function." That works until the function costs money. The moment your agent needs premium data, a paid model, a trading signal, or a token analytics call, you are back to building accounts, storing API keys, watching budgets, and writing custom 402 handlers for every provider.
 
-| Protocol | What it does | Standard |
-|----------|-------------|----------|
-| **Tempo** | Micropayments in pathUSD on Ethereum L2. HTTP 402 challenge/response with `WWW-Authenticate` header. | [Mppx](https://tempo.xyz) |
-| **x402** | USDC payments on Solana. The agent sends a signed transaction in the `X-Payment` header. | [x402](https://www.x402.org) |
-| **AP2** | Authorization via W3C Verifiable Credentials. Agents present signed mandates (intent, cart, or payment) in `X-AP2-Mandate`. ECDSA P-256 signature validation. | Agent Pay Protocol v2 |
-| **ACP** | Session-based checkout flow. Agent opens a session, commits payment, and passes the session ID in `X-ACP-Session`. | [Agent Commerce Protocol](https://www.agentcommerce.org) |
-| **AGTP** | Agent identity and intent tracking. Agents declare themselves via `Agent-ID` header with principal, scope, and budget constraints. | [AGTP draft spec](https://datatracker.ietf.org/doc/draft-hood-independent-agtp/) |
+MPP32 replaces all of that. Your agent asks for a service by name. The proxy finds it in a federated catalog of thousands of machine payable APIs, negotiates the cheapest protocol, signs payment from a key on your own machine, and returns the data. You write zero billing code. You manage zero provider accounts. Settlement lands on chain in seconds. MPP32 never touches the money.
 
-All five are active on every registered endpoint. When an agent hits a proxy endpoint without payment, MPP32 returns HTTP 402 with challenge headers for each protocol so the agent can choose how to pay.
+## What an agent gains the moment it connects
 
-## How it works
+* A live catalog of over 4,500 paid and free APIs across token intelligence, market data, web search, image generation, embeddings, DeFi analytics, wallet scoring, on chain queries, trading signals, and more.
+* Automatic payment across five protocols, picked per call based on which wallet you have funded.
+* Real time Solana token intelligence with alpha scoring, rug risk, whale flow, smart money signals, and 24 hour pump probability.
+* A dashboard at mpp32.org that tracks every call, every dollar settled, every protocol used, every latency reading.
+* Tiered discounts for M32 holders (20 percent at 250k, 40 percent at 1M) the moment a wallet is verified.
+* End to end audit. Every settlement comes back with an on chain signature you can verify on Solscan.
 
-1. **Provider registers** their API on `/build`. They provide: endpoint URL, price per query (USD), EVM wallet address, optional Solana address, and metadata (description, logo, category).
+## Payment rails
 
-2. **MPP32 assigns a proxy URL** at `/api/proxy/{slug}`. The real endpoint URL is never exposed to agents.
+| Rail | Settles in | Network | Verification |
+|:-----|:-----------|:--------|:-------------|
+| x402 | USDC | Solana | On chain through the Solana facilitator |
+| Tempo | pathUSD | Ethereum L2 | Cryptographic via the mppx SDK |
+| ACP | Checkout session | Multi chain | Database backed checkout flow |
+| AP2 | W3C verifiable credentials | Chain agnostic | ECDSA P-256 signature |
+| AGTP | HMAC signed agent certificates | Chain agnostic | HMAC SHA256 with server held salt |
 
-3. **Provider verifies ownership** by serving a challenge token at `/.well-known/mpp32-verify` on their domain. MPP32 re-verifies every 24 hours. Three consecutive failures suspend the listing.
+Every native endpoint accepts all five. None are stubbed. The server picks the rail your wallet is funded for and falls back gracefully if the first attempt does not settle.
 
-4. **Agents discover APIs** via the OpenAPI spec at `/openapi.json`, the agent card at `/.well-known/agent.json`, or the MCP config at `/api/mcp-config`.
+## Install
 
-5. **Agent sends a request** to the proxy URL. If no payment header is present, MPP32 returns 402 with protocol-specific challenge headers. The agent picks a protocol, attaches payment, and retries.
+The MCP server is on npm and listed in the [official Model Context Protocol registry](https://registry.modelcontextprotocol.io).
 
-6. **MPP32 verifies payment** using the relevant protocol library, then forwards the request to the provider's real endpoint. Response goes back to the agent. Revenue settles to the provider's wallet.
-
-## Verify it yourself
-
-The protocol integrations are not marketing claims. They are running in production. You can verify them against any registered endpoint:
-
-**See the 402 challenge with all protocol headers:**
+```bash
+npx mpp32-mcp-server
 ```
+
+Drop this into the MCP servers section of Claude Desktop, Claude Code, Cursor, Windsurf, or any MCP compatible client.
+
+```json
+{
+  "mcpServers": {
+    "mpp32": {
+      "command": "npx",
+      "args": ["mpp32-mcp-server"],
+      "env": {
+        "MPP32_AGENT_KEY": "mpp32_agent_…",
+        "MPP32_SOLANA_PRIVATE_KEY": "your_solana_private_key_for_usdc"
+      }
+    }
+  }
+}
+```
+
+Get an `MPP32_AGENT_KEY` at [mpp32.org/agent-console](https://mpp32.org/agent-console). No signup, no email, just a session form. With an agent key every call is attributed to your dashboard. Without it the server still works but you only see native services and the calls stay anonymous. Private keys never leave your machine.
+
+## What the tools do
+
+Three tools any MCP compatible agent can call.
+
+* `list_mpp32_services` browses the federated catalog. Returns native, curated free, x402 bazaar, and MCP registry entries with pricing, supported protocols, and a clear flag on every row that tells the agent whether it can actually call the service through this MCP or whether the entry is for discovery only.
+* `call_mpp32_endpoint` invokes any HTTP callable service. Free services return immediately. Paid services return a 402 challenge that this tool signs locally and retries automatically when a payment key is configured.
+* `get_solana_token_intelligence` runs the MPP32 native oracle. Pulls live data from DexScreener, Jupiter, and CoinGecko, merges it into one report, returns alpha score, rug risk, whale activity, smart money signals, 24 hour pump probability, projected ROI, and full market data. Costs $0.008 per call, paid automatically when a key is set.
+
+## Verify it without trusting us
+
+The protocol integrations are running in production. You can confirm them against any registered endpoint without writing code.
+
+See the 402 challenge with every protocol header:
+
+```bash
 curl -i https://mpp32.org/api/proxy/mpp32-intelligence
 ```
 
-The response headers will include:
-- `WWW-Authenticate` (Tempo)
-- `Payment-Required` (x402)
-- `X-ACP-Requirements` + `X-ACP-Supported` (ACP)
-- `X-AP2-Requirements` + `X-AP2-Supported` (AP2)
-- `X-AGTP-Requirements` (AGTP)
-- `X-Payment-Methods: tempo, x402, acp, ap2, agtp`
+The response will include `WWW-Authenticate`, `Payment-Required`, `X-ACP-Requirements`, `X-AP2-Requirements`, `X-AGTP-Requirements`, and `X-Payment-Methods: tempo, x402, acp, ap2, agtp`.
 
-**Read the OpenAPI spec listing every registered provider with protocol details:**
-```
+Read the full OpenAPI spec with per endpoint protocol and pricing detail:
+
+```bash
 curl https://mpp32.org/openapi.json
 ```
 
-Each endpoint in the spec includes an `x-payment-info` object with the exact protocol parameters, pricing, and network details.
+Read the federated catalog directly:
 
-**Agent discovery card (A2A format):**
-```
-curl https://mpp32.org/.well-known/agent.json
-```
-
-**List all registered APIs:**
-```
-curl https://mpp32.org/api/submissions
+```bash
+curl https://mpp32.org/api/agent/services
 ```
 
-## Provider management
+Use the single execute endpoint that wraps every protocol:
 
-Providers get a management dashboard at `/manage` where they can:
+```bash
+curl -X POST https://mpp32.org/api/agent/execute \
+  -H 'X-Agent-Key: mpp32_agent_…' \
+  -H 'Content-Type: application/json' \
+  -d '{"service":"mpp32-intelligence","method":"POST","body":{"token":"SOL"}}'
+```
 
-- View query count, estimated revenue, success rate, and average latency
-- Update pricing, wallet addresses, descriptions, and social links
-- Monitor endpoint verification status
-- Deprecate their listing if needed
-- Recover their management credentials via email verification
+## For API providers
 
-## Built-in intelligence oracle
+List your endpoint once and start receiving payment across every protocol automatically. MPP32 handles payment negotiation, on chain verification, discovery listings via OpenAPI and A2A and MCP standards, 24 hour health re checks, and a full analytics dashboard. Settlement lands in USDC or pathUSD directly to your wallet. Three consecutive verification failures suspend the listing so dead endpoints do not pollute the catalog.
 
-MPP32 runs its own API on the same infrastructure to prove the system works end to end.
+Register at [mpp32.org/build](https://mpp32.org/build). Manage your listing at [mpp32.org/manage](https://mpp32.org/manage) using a recovery code delivered to your email.
 
-`POST /api/intelligence` accepts any Solana token address or ticker and returns 8 fields: alpha score, risk-reward ratio, smart money signals, 24h pump probability, projected ROI, whale activity, rug risk score, and live market data. Sources: DexScreener, Jupiter Price API, CoinGecko. Response time under 2 seconds.
+## Security posture
 
-This endpoint accepts all 5 protocols like any other provider on the platform.
+MPP32 was built with the assumption that everything will eventually be probed.
+
+* Production environment refuses to boot if the signing secret is missing or matches a known committed default.
+* All outbound URLs from user submissions and agent execute calls run through an SSRF guard that blocks private, loopback, link local, IPv6 unique local, and cloud metadata addresses.
+* Agent session API keys are hashed at rest using SHA256. A database leak does not surrender live credentials.
+* AGTP agent identity uses HMAC SHA256 with a server held salt so signatures cannot be forged from a public agent id.
+* Recovery one time codes refuse to issue in production when the email channel is not configured. Codes are never logged in plaintext when the system is configured correctly.
+* The idempotency cache is bounded with LRU eviction. Admin endpoints are rate limited per IP on top of the secret check.
 
 ## Discovery endpoints
 
 | Endpoint | Format | Purpose |
-|----------|--------|---------|
-| `/openapi.json` | OpenAPI 3.1 | Full API spec with per-endpoint protocol and pricing info |
-| `/.well-known/agent.json` | A2A Agent Card | Agent-to-agent discovery with skills and auth schemes |
-| `/api/mcp-config` | MCP Config | MCP-compatible agent integration |
+|:---------|:-------|:--------|
+| `/openapi.json` | OpenAPI 3.1 | Full API spec with per endpoint protocol and pricing info |
+| `/.well-known/agent.json` | A2A Agent Card | Agent to agent discovery with skills and auth schemes |
+| `/api/mcp-config` | MCP Config | MCP compatible agent integration |
 | `/api/submissions` | JSON | Public directory of all registered API providers |
+| `/api/agent/services` | JSON | Federated catalog including native, curated, x402 bazaar, MCP registry |
 
 ## Stack
 
-- **Frontend:** React 18, Vite, React Router v6, Tailwind CSS, shadcn/ui, Framer Motion
-- **Backend:** Hono on Bun, Zod validation, Prisma ORM, SQLite
-- **Protocols:** Mppx SDK (Tempo), custom verification libraries (x402, AP2, ACP, AGTP)
+* Frontend: React 18, Vite, React Router v6, Tailwind, shadcn/ui, Framer Motion
+* Backend: Hono on Bun, Zod validation, Prisma, SQLite
+* Protocols: Mppx SDK (Tempo), in house verification (x402, AP2, ACP, AGTP)
+* Distribution: npm (mpp32-mcp-server), official MCP registry, published agent card
+
+## Links
+
+| Resource | URL |
+|:---------|:----|
+| Website | [mpp32.org](https://mpp32.org) |
+| Docs | [mpp32.org/docs](https://mpp32.org/docs) |
+| Playground | [mpp32.org/playground](https://mpp32.org/playground) |
+| Ecosystem | [mpp32.org/ecosystem](https://mpp32.org/ecosystem) |
+| Agent Console | [mpp32.org/agent-console](https://mpp32.org/agent-console) |
+| MCP package | [npmjs.com/package/mpp32-mcp-server](https://www.npmjs.com/package/mpp32-mcp-server) |
+| MCP registry | [registry.modelcontextprotocol.io](https://registry.modelcontextprotocol.io) |
+
+## License
+
+MIT

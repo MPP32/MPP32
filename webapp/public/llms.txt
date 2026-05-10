@@ -8,8 +8,10 @@
 
 ## API Proxy Marketplace
 
-- [GET /api/submissions](https://mpp32.org/api/submissions): Browse all listed services. Returns name, slug, category, price, and payment address.
-- [POST /api/proxy/{slug}](https://mpp32.org/api/proxy): Payment-gated proxy to any listed service. Accepts all 5 payment protocols.
+- [GET /api/agent/services](https://mpp32.org/api/agent/services): Browse the federated catalog of 4500+ machine-payable services (native + curated free + x402-bazaar + MCP-registry). Filters: `category`, `q`, `source`, `limit`. Set `X-Agent-Key` for full access and dashboard tracking.
+- [GET /api/submissions](https://mpp32.org/api/submissions): Native MPP32 services only (the subset registered through /build). Returns name, slug, category, price, and payment address.
+- [POST /api/agent/execute](https://mpp32.org/api/agent/execute): Single endpoint to call any HTTP-callable service in the catalog. Wraps the 402 challenge in a 200 response so simple agents can detect `data.result.error.code === 'PAYMENT_REQUIRED'`. Requires `X-Agent-Key`.
+- [POST /api/proxy/{slug}](https://mpp32.org/api/proxy): Direct payment-gated proxy to any native listed service. Accepts all 5 payment protocols.
 - [GET /api/proxy/{slug}/info](https://mpp32.org/api/proxy): Public metadata for any listed service (no payment required).
 
 ## Discovery

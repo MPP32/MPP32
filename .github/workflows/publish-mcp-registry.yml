@@ -1,0 +1,64 @@
+name: Publish MCP Server to Registry
+
+on:
+  push:
+    tags:
+      - 'mcp-v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (must already be on npm as mpp32-mcp-server@<version>)'
+        required: true
+        default: '1.1.0'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#mcp-v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sync server.json version
+        working-directory: mcp-server
+        run: |
+          v="${{ steps.version.outputs.version }}"
+          tmp=$(mktemp)
+          jq --arg v "$v" '.version = $v | .packages[0].version = $v' server.json > "$tmp"
+          mv "$tmp" server.json
+          cat server.json
+
+      - name: Download mcp-publisher
+        run: |
+          curl -sL -o mcp-publisher.tar.gz \
+            https://github.com/modelcontextprotocol/registry/releases/download/v1.7.8/mcp-publisher_linux_amd64.tar.gz
+          tar -xzf mcp-publisher.tar.gz mcp-publisher
+          chmod +x mcp-publisher
+
+      - name: Validate server.json
+        working-directory: mcp-server
+        run: ../mcp-publisher validate
+
+      - name: Authenticate via GitHub OIDC
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish to MCP Registry
+        working-directory: mcp-server
+        run: ../mcp-publisher publish
+
+      - name: Confirm listing
+        run: |
+          sleep 5
+          curl -s "https://registry.modelcontextprotocol.io/v0/servers?search=mpp32-mcp-server" | jq '.servers[] | {name, version: .version_detail.version, status}'

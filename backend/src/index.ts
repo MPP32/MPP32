@@ -49,6 +49,8 @@ const allowed = [
   /^https:\/\/mpp32\.org$/,
   /^https:\/\/www\.mpp32\.org$/,
   /^https:\/\/[a-z0-9-]+\.mpp32\.org$/,
+  /^https:\/\/[a-z0-9-]+\.dev\.vibecode\.run$/,
+  /^https:\/\/[a-z0-9-]+\.vibecode\.run$/,
 ];
 
 app.use(
@@ -162,7 +164,9 @@ async function openApiHandler(c: any) {
     },
     "x-service-info": {
       categories: ["data", "crypto", "intelligence", "proxy"],
-      documentation: "https://mpp32.org/api/submissions",
+      documentation: "https://mpp32.org/docs",
+      federatedCatalog: "https://mpp32.org/api/agent/services",
+      agentExecute: "https://mpp32.org/api/agent/execute",
     },
     servers: [
       { url: serverUrl, description: "Current server" },
@@ -463,8 +467,9 @@ app.get("/api/mcp-config", (c) => {
             command: "npx",
             args: ["mpp32-mcp-server"],
             env: {
-              MPP32_PRIVATE_KEY: "your-tempo-private-key",
-              MPP32_SOLANA_PRIVATE_KEY: "your-solana-private-key-for-x402",
+              MPP32_AGENT_KEY: "mpp32_agent_... (get one at https://mpp32.org/agent-console)",
+              MPP32_SOLANA_PRIVATE_KEY: "your-solana-private-key-for-x402 (only required for paid services)",
+              MPP32_PRIVATE_KEY: "your-tempo-private-key (optional fallback for paid services)",
             },
           },
         },

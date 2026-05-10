@@ -43,13 +43,40 @@ function getMppxInstance(slug: string, paymentAddress: string, price: number): M
 }
 
 // Idempotency cache: key -> { response body, status, contentType, expiresAt }
+// Bounded with LRU eviction so a flood of unique idempotency keys cannot
+// exhaust process memory. Map preserves insertion order, so we promote
+// entries to MRU on read by re-inserting them.
 interface CachedResponse {
   body: string
   status: number
   contentType: string
   expiresAt: number
 }
+const IDEMPOTENCY_CACHE_MAX = 5_000
 const idempotencyCache = new Map<string, CachedResponse>()
+
+function idempotencyGet(key: string): CachedResponse | undefined {
+  const entry = idempotencyCache.get(key)
+  if (!entry) return undefined
+  if (entry.expiresAt <= Date.now()) {
+    idempotencyCache.delete(key)
+    return undefined
+  }
+  // Promote to most-recently-used by re-inserting.
+  idempotencyCache.delete(key)
+  idempotencyCache.set(key, entry)
+  return entry
+}
+
+function idempotencySet(key: string, value: CachedResponse): void {
+  if (idempotencyCache.has(key)) idempotencyCache.delete(key)
+  idempotencyCache.set(key, value)
+  while (idempotencyCache.size > IDEMPOTENCY_CACHE_MAX) {
+    const oldest = idempotencyCache.keys().next().value
+    if (!oldest) break
+    idempotencyCache.delete(oldest)
+  }
+}
 
 setInterval(() => {
   const now = Date.now()
@@ -328,8 +355,8 @@ proxyRouter.all(
     let idempotencyKey = c.req.header('idempotency-key')
     if (idempotencyKey) {
       const cacheKey = `${slug}:${idempotencyKey}`
-      const cached = idempotencyCache.get(cacheKey)
-      if (cached && cached.expiresAt > Date.now()) {
+      const cached = idempotencyGet(cacheKey)
+      if (cached) {
         logger.info('Idempotency cache hit', { requestId, slug, idempotencyKey })
         return new Response(cached.body, {
           status: cached.status,
@@ -445,7 +472,7 @@ proxyRouter.all(
 
       // Cache for idempotency (only cache non-5xx responses)
       if (idempotencyKey && upstream.status < 500) {
-        idempotencyCache.set(`${slug}:${idempotencyKey}`, {
+        idempotencySet(`${slug}:${idempotencyKey}`, {
           body: responseBody,
           status: upstream.status,
           contentType,
