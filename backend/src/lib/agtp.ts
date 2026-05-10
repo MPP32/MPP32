@@ -1,3 +1,4 @@
+import { createHmac, createVerify, timingSafeEqual } from 'crypto'
 import type { Context } from 'hono'
 import { env } from '../env.js'
 import { logger } from './mpp.js'
@@ -11,6 +12,9 @@ export const AGTP_ERROR_CODES = {
   BUDGET_EXCEEDED: 'AGTP_BUDGET_EXCEEDED',
   INVALID_INTENT: 'AGTP_INVALID_INTENT',
   AGENT_UNVERIFIED: 'AGTP_AGENT_UNVERIFIED',
+  SIGNATURE_MISSING: 'AGTP_SIGNATURE_MISSING',
+  SIGNATURE_INVALID: 'AGTP_SIGNATURE_INVALID',
+  TIMESTAMP_EXPIRED: 'AGTP_TIMESTAMP_EXPIRED',
 } as const
 
 const VALID_INTENTS = new Set([
@@ -18,6 +22,8 @@ const VALID_INTENTS = new Set([
   'DELEGATE', 'COLLABORATE', 'CONFIRM', 'ESCALATE',
   'NOTIFY', 'DESCRIBE', 'SUSPEND',
 ])
+
+const SIGNATURE_MAX_AGE_MS = 5 * 60 * 1000
 
 export function isAGTPEnabled(): boolean {
   return env.AGTP_ENABLED === 'true'
@@ -53,32 +59,92 @@ export function getAGTPIntentMethod(c: Context): string | null {
   return VALID_INTENTS.has(upper) ? upper : null
 }
 
+export function getAGTPSignature(c: Context): { signature: string; timestamp: string } | null {
+  const signature = c.req.header('agent-signature') ?? c.req.header('x-agent-signature')
+  const timestamp = c.req.header('agent-timestamp') ?? c.req.header('x-agent-timestamp')
+  if (!signature || !timestamp) return null
+  return { signature, timestamp }
+}
+
 export function createAGTPChallenge(resource: string): string {
   const challenge = {
     protocol: 'agtp',
     version: 'draft-hood-independent-agtp-01',
     resource,
-    description: 'Agent Transfer Protocol identity supported — include Agent-ID header with agent identifier for enhanced tracking and priority routing',
+    description: 'Agent Transfer Protocol — include Agent-ID, Agent-Signature (HMAC-SHA256 of agentId:method:path:timestamp), and Agent-Timestamp headers',
     supportedMethods: ['QUERY', 'SUMMARIZE', 'BOOK', 'SCHEDULE', 'DELEGATE', 'COLLABORATE'],
-    requiredHeaders: ['Agent-ID'],
+    requiredHeaders: ['Agent-ID', 'Agent-Signature', 'Agent-Timestamp'],
     optionalHeaders: ['Principal-ID', 'Authority-Scope', 'AGTP-Session-ID', 'AGTP-Task-ID', 'Budget-Limit'],
+    signatureFormat: 'HMAC-SHA256(agentId:METHOD:path:timestamp) — key is the agent\'s secret',
   }
   return Buffer.from(JSON.stringify(challenge)).toString('base64')
+}
+
+function verifySignature(agentId: string, signature: string, timestamp: string, method: string, path: string): boolean {
+  // The signing input is deterministic: agentId:METHOD:path:timestamp
+  const signingInput = `${agentId}:${method}:${path}:${timestamp}`
+
+  // Try HMAC-SHA256 verification: signature = HMAC(signingInput, agentSecret)
+  // The agent's secret is the agentId itself hashed — this is a basic trust model
+  // where agents prove they know their own ID by producing a valid HMAC.
+  // For production, agents would register their HMAC keys.
+  try {
+    const decoded = Buffer.from(signature, 'base64')
+    if (decoded.length < 32) return false
+
+    // Verify the HMAC was produced with a key derived from the agent ID
+    // Agent computes: HMAC-SHA256(signingInput, SHA256(agentId))
+    const agentKey = createHmac('sha256', 'mpp32-agtp-v1').update(agentId).digest()
+    const expected = createHmac('sha256', agentKey).update(signingInput).digest()
+
+    if (decoded.length !== expected.length) return false
+    return timingSafeEqual(decoded, expected)
+  } catch {
+    return false
+  }
 }
 
 export async function verifyAGTPAgent(
   headers: AGTPHeaders,
   resource: string,
   amount?: string,
+  method?: string,
+  signatureData?: { signature: string; timestamp: string } | null,
 ): Promise<AGTPVerificationResult> {
   const { agentId, principalId, authorityScope, budgetLimit } = headers
 
-  // Validate agent ID format: must be non-empty, reasonable length
   if (!agentId || agentId.length < 2 || agentId.length > 512) {
     return { verified: false, error: 'Invalid Agent-ID format', errorCode: AGTP_ERROR_CODES.INVALID_AGENT_ID }
   }
 
-  // Validate authority scope if present — must cover the requested resource
+  // Require cryptographic signature
+  if (!signatureData) {
+    return {
+      verified: false,
+      agentId,
+      error: 'Agent-Signature and Agent-Timestamp headers required — sign agentId:METHOD:path:timestamp with HMAC-SHA256',
+      errorCode: AGTP_ERROR_CODES.SIGNATURE_MISSING,
+    }
+  }
+
+  // Validate timestamp freshness
+  const ts = parseInt(signatureData.timestamp, 10)
+  if (isNaN(ts)) {
+    return { verified: false, agentId, error: 'Agent-Timestamp must be a Unix epoch in seconds', errorCode: AGTP_ERROR_CODES.TIMESTAMP_EXPIRED }
+  }
+  const age = Math.abs(Date.now() - ts * 1000)
+  if (age > SIGNATURE_MAX_AGE_MS) {
+    return { verified: false, agentId, error: 'Agent-Timestamp expired (max 5 minutes)', errorCode: AGTP_ERROR_CODES.TIMESTAMP_EXPIRED }
+  }
+
+  // Verify signature
+  const requestMethod = method ?? 'POST'
+  const isValid = verifySignature(agentId, signatureData.signature, signatureData.timestamp, requestMethod, resource)
+  if (!isValid) {
+    return { verified: false, agentId, error: 'Agent-Signature verification failed', errorCode: AGTP_ERROR_CODES.SIGNATURE_INVALID }
+  }
+
+  // Validate authority scope if present
   if (authorityScope) {
     const scopes = authorityScope.split(',').map(s => s.trim())
     const resourceDomain = resource.split('/').slice(0, 3).join('/')

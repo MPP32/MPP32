@@ -6,3 +6,4 @@ dist
 *.lcov
 coverage
 bun.lock
+.npmrc

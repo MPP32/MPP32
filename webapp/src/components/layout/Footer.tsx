@@ -2,10 +2,13 @@ import { Link } from "react-router-dom";
 
 const footerLinks = {
   Product: [
+    { label: "Agent Plugin", href: "/agent-hub" },
+    { label: "Agent Console", href: "/agent-console" },
+    { label: "Service Catalog", href: "/catalog" },
     { label: "Oracle", href: "/oracle" },
     { label: "Use Cases", href: "/use-cases" },
     { label: "Playground", href: "/playground" },
-    { label: "Console", href: "/dashboard" },
+    { label: "Query History", href: "/dashboard" },
     { label: "Pricing", href: "/pricing" },
   ],
   Providers: [

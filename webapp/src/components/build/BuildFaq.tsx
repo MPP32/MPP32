@@ -24,7 +24,19 @@ const faqs = [
   },
   {
     q: "How long does listing take?",
-    a: "Submissions go live instantly. The moment you submit your project, it appears in the ecosystem directory and your proxy URL is active. No review queue, no waiting period.",
+    a: "Submissions appear in the ecosystem directory instantly. Your proxy URL is active right away, but proxy traffic only flows to your endpoint after you complete endpoint verification. Verification takes about 2 minutes — add a route to your server, then click Verify in your dashboard.",
+  },
+  {
+    q: "How does endpoint verification work?",
+    a: "When you submit, you receive a verification token. Add a route to your server at /api/mpp32-verify that returns this token as plain text (HTTP 200, no JSON or HTML wrapper). Then go to /manage → Overview → click Verify Now. The system checks your endpoint and activates proxy traffic. The full setup guide with code examples for Express, Python, and static files is in your dashboard and docs.",
+  },
+  {
+    q: "What if endpoint verification fails?",
+    a: "Common causes: your route returns JSON instead of plain text, your server isn't publicly accessible over HTTPS, or there's extra whitespace in the response. Run 'curl -s https://yourdomain.com/api/mpp32-verify' to test — the output should be exactly your token with nothing else. You can retry verification as many times as needed. If the system's automatic daily re-check fails 3 times in a row, proxy traffic is paused until you re-verify.",
+  },
+  {
+    q: "What if I change my endpoint URL later?",
+    a: "You can change your endpoint URL anytime from the Edit Settings tab in your dashboard. Changing the URL resets your verification status and generates a new verification token. You'll need to set up the /api/mpp32-verify route at the new URL and re-verify.",
   },
   {
     q: "Is listing free?",

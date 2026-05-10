@@ -9,6 +9,10 @@ export default defineConfig(({ mode }) => ({
     port: 8000,
     allowedHosts: true,
     proxy: {
+      "/api": {
+        target: "http://localhost:3000",
+        changeOrigin: true,
+      },
       "/openapi.json": {
         target: "http://localhost:3000",
         changeOrigin: true,
@@ -17,7 +21,7 @@ export default defineConfig(({ mode }) => ({
         target: "http://localhost:3000",
         changeOrigin: true,
       },
-      "/.well-known/agent.json": {
+      "/.well-known": {
         target: "http://localhost:3000",
         changeOrigin: true,
       },

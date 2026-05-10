@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import { env } from '../env.js'
 import { logger } from './mpp.js'
+import { prisma } from './db.js'
 import type { ACPVerificationResult } from '../types.js'
 
 export const ACP_ERROR_CODES = {
@@ -9,6 +10,7 @@ export const ACP_ERROR_CODES = {
   PAYMENT_INCOMPLETE: 'ACP_PAYMENT_INCOMPLETE',
   SESSION_CANCELED: 'ACP_SESSION_CANCELED',
   AMOUNT_MISMATCH: 'ACP_AMOUNT_MISMATCH',
+  SESSION_NOT_FOUND: 'ACP_SESSION_NOT_FOUND',
 } as const
 
 export function isACPEnabled(): boolean {
@@ -28,8 +30,9 @@ export function createACPChallenge(resource: string, amount: string): string {
     protocol: 'acp',
     version: '2026-04-17',
     resource,
-    description: 'Agent Commerce Protocol session supported — include X-ACP-Session header with checkout session ID or base64-encoded session credential',
+    description: 'Agent Commerce Protocol — create a checkout session first via POST /api/checkout/sessions, then include the session ID in X-ACP-Session header',
     requiredHeaders: ['X-ACP-Session'],
+    checkoutEndpoint: '/api/checkout/sessions',
     amount,
     currency: 'USD',
     capabilities: ['checkout', 'cart', 'payment'],
@@ -42,21 +45,18 @@ export async function verifyACPSession(
   resource: string,
   amount: string,
 ): Promise<ACPVerificationResult> {
-  let sessionData: Record<string, unknown> | null = null
   let sessionId: string
 
-  // Try base64-encoded JSON first
+  // Try base64-encoded JSON first (structured credential)
   try {
     const decoded = Buffer.from(sessionHeader, 'base64').toString('utf-8')
     const parsed = JSON.parse(decoded)
     if (typeof parsed === 'object' && parsed !== null) {
-      sessionData = parsed as Record<string, unknown>
       sessionId = (parsed.sessionId as string) ?? (parsed.id as string) ?? sessionHeader
     } else {
       sessionId = sessionHeader
     }
   } catch {
-    // Plain session ID string
     sessionId = sessionHeader
   }
 
@@ -64,56 +64,53 @@ export async function verifyACPSession(
     return { verified: false, error: 'Invalid ACP session identifier', errorCode: ACP_ERROR_CODES.INVALID_SESSION }
   }
 
-  // If structured session data, validate fields
-  if (sessionData) {
-    const status = sessionData.status as string | undefined
-    if (status === 'canceled') {
-      return { verified: false, sessionId, status: 'canceled', error: 'ACP session was canceled', errorCode: ACP_ERROR_CODES.SESSION_CANCELED }
-    }
-    if (status === 'expired') {
-      return { verified: false, sessionId, status: 'expired', error: 'ACP session has expired', errorCode: ACP_ERROR_CODES.EXPIRED_SESSION }
-    }
-    if (status === 'incomplete') {
-      return { verified: false, sessionId, status: 'incomplete', error: 'ACP payment not yet completed', errorCode: ACP_ERROR_CODES.PAYMENT_INCOMPLETE }
-    }
+  // Look up session in database
+  const session = await prisma.checkoutSession.findUnique({
+    where: { sessionId },
+  })
 
-    // Validate expiry
-    const expiresAt = sessionData.expiresAt as string | undefined
-    if (expiresAt) {
-      const expiry = new Date(expiresAt)
-      if (!isNaN(expiry.getTime()) && expiry <= new Date()) {
-        return { verified: false, sessionId, status: 'expired', error: 'ACP session has expired', errorCode: ACP_ERROR_CODES.EXPIRED_SESSION }
-      }
-    }
+  if (!session) {
+    return { verified: false, sessionId, error: 'Checkout session not found — create one via POST /api/checkout/sessions', errorCode: ACP_ERROR_CODES.SESSION_NOT_FOUND }
+  }
 
-    // Validate amount if present
-    const sessionAmount = sessionData.amount as string | undefined
-    if (sessionAmount) {
-      const requested = parseFloat(amount)
-      const authorized = parseFloat(sessionAmount)
-      if (!isNaN(requested) && !isNaN(authorized) && requested > authorized) {
-        return {
-          verified: false,
-          sessionId,
-          error: `Requested amount $${amount} exceeds session authorization $${sessionAmount}`,
-          errorCode: ACP_ERROR_CODES.AMOUNT_MISMATCH,
-        }
-      }
-    }
+  if (session.status === 'canceled') {
+    return { verified: false, sessionId, status: 'canceled', error: 'Checkout session was canceled', errorCode: ACP_ERROR_CODES.SESSION_CANCELED }
+  }
 
-    // Validate resource scope
-    const scope = sessionData.resource as string | undefined
-    if (scope && !resource.startsWith(scope)) {
-      return { verified: false, sessionId, error: `Resource ${resource} not covered by session scope`, errorCode: ACP_ERROR_CODES.INVALID_SESSION }
+  if (session.status === 'expired' || session.expiresAt <= new Date()) {
+    if (session.status !== 'expired') {
+      await prisma.checkoutSession.update({ where: { sessionId }, data: { status: 'expired' } })
+    }
+    return { verified: false, sessionId, status: 'expired', error: 'Checkout session has expired', errorCode: ACP_ERROR_CODES.EXPIRED_SESSION }
+  }
+
+  if (session.status !== 'completed') {
+    return { verified: false, sessionId, status: 'incomplete', error: 'Checkout session payment not yet completed', errorCode: ACP_ERROR_CODES.PAYMENT_INCOMPLETE }
+  }
+
+  // Validate amount
+  const requested = parseFloat(amount)
+  const authorized = parseFloat(session.amount)
+  if (!isNaN(requested) && !isNaN(authorized) && requested > authorized) {
+    return {
+      verified: false,
+      sessionId,
+      error: `Requested amount $${amount} exceeds session authorization $${session.amount}`,
+      errorCode: ACP_ERROR_CODES.AMOUNT_MISMATCH,
     }
   }
 
-  logger.info('ACP session verified', { sessionId, resource, amount })
+  // Validate resource scope
+  if (!resource.startsWith(session.resource) && session.resource !== '*') {
+    return { verified: false, sessionId, error: `Resource ${resource} not covered by session scope ${session.resource}`, errorCode: ACP_ERROR_CODES.INVALID_SESSION }
+  }
+
+  logger.info('ACP session verified', { sessionId, resource, amount, merchantId: session.merchantId })
   return {
     verified: true,
     sessionId,
-    status: (sessionData?.status as 'completed' | undefined) ?? 'completed',
-    merchantId: sessionData?.merchantId as string | undefined,
+    status: 'completed',
+    merchantId: session.merchantId ?? undefined,
     amount,
   }
 }

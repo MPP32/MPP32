@@ -71,13 +71,31 @@ const useCases = [
     title: "Infrastructure Services",
     price: "0.001",
     unit: "/ call",
-    description: "RPC endpoints, indexing, storage, compute, or any infrastructure where per request pricing aligns cost with actual usage.",
+    description: "RPC endpoints, indexing, storage, compute, or any infrastructure where per-request pricing aligns cost with actual usage.",
     payload: `{
   "block": 28410923,
   "timestamp": "2026-04-29T...",
   "result": { ... }
 }`,
     featured: false,
+    horizontal: false,
+  },
+  {
+    id: "enrichment",
+    tag: "TRANSFORM",
+    title: "Enrichment & Processing",
+    price: "0.003",
+    unit: "/ request",
+    description: "Data enrichment, geocoding, entity resolution, format conversion, or any transformation that takes raw input and returns enhanced output.",
+    payload: `{
+  "input": "0x2a87...6c1",
+  "enriched": {
+    "label": "MPP32 Treasury",
+    "risk": "low",
+    "tags": ["dao", "verified"]
+  }
+}`,
+    featured: true,
     horizontal: false,
   },
   {

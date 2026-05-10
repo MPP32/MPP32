@@ -64,6 +64,7 @@ const phases: Phase[] = [
     title: "Provider Tools and Protocol Expansion",
     milestones: [
       { text: "Token gated fee reduction for MPP32 Oracle (250K / 1M tiers)", done: true },
+      { text: "Sign-In With Solana (SIWS) wallet verification — required to activate M32 holder discounts" },
       { text: "API key system for providers with high volume callers" },
       { text: "Provider revenue dashboards with exportable analytics and payout history" },
       { text: "Webhook notifications for providers on query milestones, errors, and revenue thresholds" },

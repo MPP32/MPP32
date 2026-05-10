@@ -220,7 +220,7 @@ function SuccessState({ submission }: { submission: SubmissionCreatedResponse })
     submission.slug;
 
   const verifyUrl = submission.endpointUrl
-    ? new URL(submission.endpointUrl).origin + "/.well-known/mpp32-verify"
+    ? new URL(submission.endpointUrl).origin + "/api/mpp32-verify"
     : "";
 
   function handleDownload() {
@@ -325,18 +325,54 @@ function SuccessState({ submission }: { submission: SubmissionCreatedResponse })
             </div>
             <div className="px-5 py-4 space-y-4">
               <p className="text-sm text-muted-foreground leading-relaxed">
-                Your endpoint must serve a verification token so we can confirm you control it. Set up the following URL to return HTTP 200 with the token as the response body.
+                Proxy traffic activates after you verify ownership of your endpoint. Add a route to your server that returns a verification token, then confirm it from your dashboard.
               </p>
+
+              {/* Step-by-step */}
+              <div className="space-y-2.5">
+                {[
+                  { label: "Add this route to your server", desc: "It must return HTTP 200 with the token as plain text — no JSON, no HTML." },
+                  { label: "Test it yourself", desc: `Run: curl -s ${submission.endpointUrl ? new URL(submission.endpointUrl).origin : "https://yourdomain.com"}/api/mpp32-verify` },
+                  { label: "Click Verify in your dashboard", desc: "Go to /manage → Overview → Verify Now." },
+                ].map((step, i) => (
+                  <div key={i} className="flex items-start gap-2.5">
+                    <span className="flex items-center justify-center w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 text-[10px] font-bold shrink-0 mt-0.5">{i + 1}</span>
+                    <div>
+                      <p className="text-sm text-foreground font-medium">{step.label}</p>
+                      <p className="text-xs text-muted-foreground">{step.desc}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Quick-start code example */}
               <div>
                 <p className="font-mono text-xs text-muted-foreground uppercase tracking-wide mb-1.5">
-                  Well-known URL
+                  Quick Start (Express.js)
+                </p>
+                <div className="bg-[#0d0d0d] border border-mpp-border rounded px-3 py-2">
+                  <pre className="font-mono text-xs text-foreground leading-relaxed whitespace-pre-wrap">{`app.get('/api/mpp32-verify', (req, res) => {
+  res.type('text/plain').send('${submission.verificationToken}');
+});`}</pre>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1.5">
+                  More examples (Python, static files) available in your{" "}
+                  <a href="/manage" className="text-blue-400 hover:underline">dashboard</a>{" "}
+                  and{" "}
+                  <a href="/docs" className="text-blue-400 hover:underline">docs</a>.
+                </p>
+              </div>
+
+              <div>
+                <p className="font-mono text-xs text-muted-foreground uppercase tracking-wide mb-1.5">
+                  Well-Known URL
                 </p>
                 <div className="flex items-center gap-3">
                   <code className="font-mono text-sm text-blue-400 break-all flex-1 bg-[#0d0d0d] border border-mpp-border rounded px-3 py-2">
-                    {submission.endpointUrl ? new URL(submission.endpointUrl).origin : ""}/.well-known/mpp32-verify
+                    {submission.endpointUrl ? new URL(submission.endpointUrl).origin : ""}/api/mpp32-verify
                   </code>
                   <CopyButton
-                    text={`${submission.endpointUrl ? new URL(submission.endpointUrl).origin : ""}/.well-known/mpp32-verify`}
+                    text={`${submission.endpointUrl ? new URL(submission.endpointUrl).origin : ""}/api/mpp32-verify`}
                   />
                 </div>
               </div>
@@ -351,9 +387,6 @@ function SuccessState({ submission }: { submission: SubmissionCreatedResponse })
                   <CopyButton text={submission.verificationToken} label="Copy Token" />
                 </div>
               </div>
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                Your endpoint must return HTTP 200 with this exact token as the response body. Then click Verify in your management dashboard.
-              </p>
             </div>
           </div>
 
@@ -364,11 +397,11 @@ function SuccessState({ submission }: { submission: SubmissionCreatedResponse })
             </p>
             <ol className="space-y-3">
               {[
-                "Save your management token somewhere safe.",
-                "Set up the verification endpoint at /.well-known/mpp32-verify to activate proxy traffic.",
-                "Test your endpoint to confirm it responds correctly through the proxy.",
-                "Visit /manage to monitor queries, revenue, and update settings anytime.",
-                "If you ever lose this token, you can recover it using your email at /manage.",
+                "Save your management token — you need it to access your dashboard.",
+                "Add the verification route to your server (see code example above).",
+                "Test it: run the curl command above to confirm it returns your token.",
+                "Go to /manage → Overview → click Verify Now to activate proxy traffic.",
+                "Lost your token? Recover it anytime at /manage using your creator email.",
               ].map((txt, i) => (
                 <li key={i} className="flex items-start gap-3 text-sm">
                   <span className="shrink-0 w-6 h-6 rounded-full border border-mpp-amber/40 bg-mpp-amber/5 flex items-center justify-center font-mono text-xs text-mpp-amber">

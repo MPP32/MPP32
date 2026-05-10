@@ -102,8 +102,17 @@ function MessageList({ adminKey }: { adminKey: string }) {
     return (
       <div className="max-w-3xl mx-auto mt-12 px-4">
         <div className="bg-red-500/10 border border-red-500/30 rounded px-4 py-3 text-red-400 text-sm">
-          Failed to load messages. Your key may have changed.
+          Failed to load messages. Your key may be incorrect or have changed.
         </div>
+        <button
+          onClick={() => {
+            localStorage.removeItem("mpp32_admin_key");
+            window.location.reload();
+          }}
+          className="mt-4 text-mpp-amber hover:text-mpp-amber/80 text-sm font-mono transition-colors"
+        >
+          Try a different key
+        </button>
       </div>
     );
   }

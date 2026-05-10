@@ -183,8 +183,8 @@ submissionsRouter.delete('/admin/:slug', async (c) => {
   }
 })
 
-// Admin: clear all submissions and seed with MPP32 listing (requires MPP_SECRET_KEY)
-submissionsRouter.post('/admin/reset-and-seed', async (c) => {
+// Admin: clear all submissions (requires MPP_SECRET_KEY)
+submissionsRouter.post('/admin/reset', async (c) => {
   const secret = c.req.header('x-admin-key')
   if (!verifyAdminSecret(secret)) {
     return c.json({ error: { message: 'Forbidden', code: 'FORBIDDEN' } }, 403)
@@ -193,46 +193,7 @@ submissionsRouter.post('/admin/reset-and-seed', async (c) => {
   const deleted = await prisma.submission.deleteMany({})
   logger.info('Admin cleared all submissions', { count: deleted.count })
 
-  const token = randomBytes(32).toString('hex')
-  const tokenHash = createHash('sha256').update(token).digest('hex')
-  const verificationToken = randomBytes(32).toString('hex')
-
-  const mpp32 = await prisma.submission.create({
-    data: {
-      name: 'MPP32 Solana Intelligence Oracle',
-      slug: 'mpp32-intelligence',
-      shortDescription: 'Real-time Solana token intelligence with alpha scores, rug risk, whale tracking, and market data from DexScreener, Jupiter, and CoinGecko.',
-      fullDescription: 'The MPP32 Intelligence Oracle provides comprehensive on-chain analysis for any Solana token. Submit a token address or ticker and receive alpha score (0-100), rug risk assessment, whale activity tracking, smart money signals, 24h pump probability, projected ROI ranges, and full market data. Data sourced in real-time from DexScreener, Jupiter Price API, and CoinGecko. Accepts all 5 payment protocols: Tempo, x402, ACP, AP2, and AGTP. M32 token holders receive up to 40% discount.',
-      category: 'token-scanner',
-      websiteUrl: 'https://mpp32.org',
-      endpointUrl: 'https://mpp32.org/api/intelligence',
-      pricePerQuery: 0.008,
-      paymentAddress: '0x2a87Da867d725aA8853dc88548Ad6C64bBb456c1',
-      solanaAddress: '9Pa8yUe8k1aRAoS1J8T5d4Mc4zXH2QTKiHE7wibowt6S',
-      creatorName: 'MPP32',
-      creatorEmail: 'admin@mpp32.org',
-      logoUrl: '/logo-mpp32.jpg',
-      twitterHandle: 'MPP32_dev',
-      githubUrl: 'https://github.com/MPP32/MPP32',
-      status: 'featured',
-      managementToken: tokenHash,
-      verificationToken,
-      isVerified: true,
-      verifyFailCount: 0,
-      lastVerifiedAt: new Date(),
-    },
-  })
-
-  logger.info('Admin seeded MPP32 listing', { slug: mpp32.slug })
-
-  return c.json({
-    data: {
-      cleared: deleted.count,
-      seeded: formatSubmission(mpp32),
-      managementToken: token,
-      verificationToken,
-    },
-  })
+  return c.json({ data: { cleared: deleted.count } })
 })
 
 // Admin: recover management token directly (requires MPP_SECRET_KEY)
@@ -258,6 +219,28 @@ submissionsRouter.post('/admin/:slug/recover', async (c) => {
   logger.info('Admin recovered management token', { slug })
 
   return c.json({ data: { slug, managementToken: token } })
+})
+
+// Admin: set submission status (requires MPP_SECRET_KEY)
+submissionsRouter.post('/admin/:slug/approve', async (c) => {
+  const secret = c.req.header('x-admin-key')
+  if (!verifyAdminSecret(secret)) {
+    return c.json({ error: { message: 'Forbidden', code: 'FORBIDDEN' } }, 403)
+  }
+  const slug = c.req.param('slug')
+  const submission = await prisma.submission.findUnique({ where: { slug } })
+  if (!submission) {
+    return c.json({ error: { message: 'Not found', code: 'NOT_FOUND' } }, 404)
+  }
+
+  const updated = await prisma.submission.update({
+    where: { slug },
+    data: { status: 'featured', isVerified: true, lastVerifiedAt: new Date() },
+  })
+
+  logger.info('Admin approved submission', { slug, status: updated.status })
+
+  return c.json({ data: { slug, status: updated.status } })
 })
 
 // POST /api/submissions/validate-endpoint — test URL reachability (no auth)
@@ -578,7 +561,7 @@ submissionsRouter.post(
         logoUrl: body.logoUrl ?? null,
         twitterHandle: body.twitterHandle ?? null,
         githubUrl: body.githubUrl ?? null,
-        status: 'pending',
+        status: 'approved',
         managementToken: tokenHash,
         verificationToken,
         isVerified: false,

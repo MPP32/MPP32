@@ -1,14 +1,4 @@
-import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Copy, Check } from "lucide-react";
-
-const CA = "6hKtz8FV7cAQMrbjcBZeTQAcrYep3WCM83164JpJpump";
-
-const discountTiers = [
-  { label: "No tokens", rate: "0.008", note: "Standard rate", highlight: false },
-  { label: "Hold 250K+ M32", rate: "0.0064", note: "20% fee reduction", highlight: false },
-  { label: "Hold 1M+ M32", rate: "0.0048", note: "40% fee reduction", highlight: true },
-];
 
 const rows = [
   { queries: "100 queries", cost: "$0.80" },
@@ -36,75 +26,9 @@ const faqs = [
   },
   {
     q: "Can I get volume discounts?",
-    a: "Hold M32 tokens in your Solana wallet to unlock automatic fee reductions. 250K M32 gives you 20% off ($0.0064 per query) and 1M M32 gives you 40% off ($0.0048 per query). Pass your wallet address via the X-Wallet-Address header and the discount applies automatically. For enterprise agreements above 100,000 queries per month, reach out via our contact page.",
+    a: "For enterprise agreements above 100,000 queries per month, reach out via our contact page.",
   },
 ];
-
-function DiscountCard() {
-  const [copied, setCopied] = useState(false);
-
-  function handleCopy() {
-    navigator.clipboard.writeText(CA).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  }
-
-  return (
-    <div className="card-surface rounded p-5 border-l-2 border-l-mpp-amber">
-      <div className="flex items-start gap-4">
-        <span className="text-mpp-amber text-base flex-shrink-0 mt-0.5">■</span>
-        <div className="flex-1 min-w-0">
-          <p className="text-foreground font-semibold text-sm mb-1">M32 Token Holder Discounts</p>
-          <p className="text-muted-foreground text-sm leading-relaxed mb-4">
-            Hold M32 tokens in your Solana wallet to unlock reduced per-query pricing.
-            Pass your wallet address via the <code className="font-mono text-xs text-mpp-amber">X-Wallet-Address</code> header and the discount applies automatically.
-          </p>
-
-          <div className="space-y-2 mb-4">
-            {discountTiers.map((tier) => (
-              <div
-                key={tier.label}
-                className={`rounded p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 ${
-                  tier.highlight
-                    ? "bg-mpp-amber/5 border border-mpp-amber/20"
-                    : "bg-mpp-bg border border-mpp-border"
-                }`}
-              >
-                <span className="text-foreground text-sm font-medium">{tier.label}</span>
-                <div className="flex items-center gap-3">
-                  <span className="font-mono text-mpp-amber text-sm">{tier.rate} USD / query</span>
-                  <span className="text-muted-foreground text-xs">{tier.note}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div>
-            <p className="font-mono text-mpp-amber text-xs uppercase tracking-widest mb-2">Contract Address</p>
-            <div className="flex items-center gap-2 bg-mpp-bg border border-mpp-border rounded px-3 py-2">
-              <code className="font-mono text-xs text-foreground break-all flex-1">{CA}</code>
-              <button
-                onClick={handleCopy}
-                className="flex-shrink-0 text-muted-foreground hover:text-mpp-amber transition-colors p-1 rounded"
-                aria-label="Copy contract address"
-              >
-                {copied ? (
-                  <Check className="w-3.5 h-3.5 text-mpp-success" />
-                ) : (
-                  <Copy className="w-3.5 h-3.5" />
-                )}
-              </button>
-            </div>
-            {copied ? (
-              <p className="font-mono text-mpp-success text-xs mt-1">Copied!</p>
-            ) : null}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 export default function Pricing() {
   return (
@@ -136,9 +60,6 @@ export default function Pricing() {
             </p>
           </div>
         </div>
-
-        {/* M32 Token Discount */}
-        <DiscountCard />
 
         {/* Builder callout */}
         <div className="card-surface rounded p-5 border-l-2 border-l-mpp-amber flex items-start gap-4">

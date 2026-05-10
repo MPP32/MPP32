@@ -69,7 +69,7 @@ export function HeroSection() {
               translating protocols, and routing revenue directly to your
               wallet. Register once, accept every protocol automatically.
             </p>
-            <div className="flex flex-col sm:flex-row gap-3 mb-6">
+            <div className="flex flex-col sm:flex-row gap-3 mb-3">
               <Link to="/build">
                 <button className="btn-amber flex items-center gap-2 px-6 py-2.5 rounded text-sm font-semibold w-full sm:w-auto justify-center">
                   Connect Your API
@@ -80,6 +80,26 @@ export function HeroSection() {
                 <button className="border border-mpp-border text-foreground hover:border-mpp-amber/40 transition-colors flex items-center gap-2 px-6 py-2.5 rounded text-sm w-full sm:w-auto justify-center">
                   See It Work
                 </button>
+              </Link>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-3 mb-3">
+              <Link to="/agent-console">
+                <button className="border border-mpp-amber/40 bg-mpp-amber/5 text-mpp-amber hover:bg-mpp-amber/10 transition-colors flex items-center gap-2 px-6 py-2.5 rounded text-sm font-semibold w-full sm:w-auto justify-center">
+                  <Bot className="w-4 h-4" />
+                  Launch an Agent
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </Link>
+              <Link to="/catalog">
+                <button className="border border-mpp-border text-foreground hover:border-mpp-amber/40 transition-colors flex items-center gap-2 px-6 py-2.5 rounded text-sm w-full sm:w-auto justify-center">
+                  Browse 4,000+ services
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </Link>
+            </div>
+            <div className="mb-6">
+              <Link to="/agent-hub" className="text-muted-foreground hover:text-foreground transition-colors text-sm flex items-center gap-1">
+                How agent commerce works →
               </Link>
             </div>
             <p className="font-mono text-muted-foreground text-xs">

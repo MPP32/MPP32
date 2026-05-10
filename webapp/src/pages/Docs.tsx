@@ -477,7 +477,7 @@ curl -X POST https://mpp32.org/api/intelligence \\
             <div className="space-y-3 mb-6">
               {[
                 { step: "1", label: "Submit your endpoint", desc: "Register your API on the Build page. You receive a unique verification token in the response." },
-                { step: "2", label: "Serve the token", desc: "Configure your server to respond to GET requests at /.well-known/mpp32-verify with HTTP 200 and the token as the plain-text body." },
+                { step: "2", label: "Serve the token", desc: "Configure your server to respond to GET requests at /api/mpp32-verify with HTTP 200 and the token as the plain-text body." },
                 { step: "3", label: "Click Verify", desc: "Open the management dashboard and click Verify Now. The proxy fetches your well-known URL and checks that the response body matches your token." },
                 { step: "4", label: "Traffic flows", desc: "Once verified, the proxy begins routing paid requests to your endpoint. Your listing shows a green Verified badge in the ecosystem." },
               ].map((s) => (
@@ -495,21 +495,23 @@ curl -X POST https://mpp32.org/api/intelligence \\
             <div className="space-y-4 mb-6">
               <div className="card-surface rounded p-4">
                 <p className="font-mono text-[10px] text-muted-foreground uppercase tracking-wider mb-2">Express.js</p>
-                <pre className="font-mono text-xs text-foreground leading-relaxed whitespace-pre-wrap">{`app.get('/.well-known/mpp32-verify', (req, res) => {
+                <pre className="font-mono text-xs text-foreground leading-relaxed whitespace-pre-wrap">{`app.get('/api/mpp32-verify', (req, res) => {
   res.type('text/plain').send(process.env.MPP32_VERIFY_TOKEN);
 });`}</pre>
               </div>
               <div className="card-surface rounded p-4">
                 <p className="font-mono text-[10px] text-muted-foreground uppercase tracking-wider mb-2">Python (Flask)</p>
-                <pre className="font-mono text-xs text-foreground leading-relaxed whitespace-pre-wrap">{`@app.route('/.well-known/mpp32-verify')
+                <pre className="font-mono text-xs text-foreground leading-relaxed whitespace-pre-wrap">{`@app.route('/api/mpp32-verify')
 def mpp32_verify():
     return os.environ['MPP32_VERIFY_TOKEN'], 200, {'Content-Type': 'text/plain'}`}</pre>
               </div>
               <div className="card-surface rounded p-4">
                 <p className="font-mono text-[10px] text-muted-foreground uppercase tracking-wider mb-2">Static file</p>
-                <pre className="font-mono text-xs text-foreground leading-relaxed whitespace-pre-wrap">{`# Create the file at .well-known/mpp32-verify in your web root
-# Contents: your verification token (plain text, no newline)
-echo -n "YOUR_TOKEN_HERE" > .well-known/mpp32-verify`}</pre>
+                <pre className="font-mono text-xs text-foreground leading-relaxed whitespace-pre-wrap">{`# Nginx: serve the token at /api/mpp32-verify
+location = /api/mpp32-verify {
+  default_type text/plain;
+  return 200 'YOUR_TOKEN_HERE';
+}`}</pre>
               </div>
             </div>
 
@@ -517,7 +519,7 @@ echo -n "YOUR_TOKEN_HERE" > .well-known/mpp32-verify`}</pre>
             <div className="card-surface border-l-2 border-mpp-amber/60 rounded p-4 bg-mpp-amber/5">
               <p className="text-xs text-muted-foreground leading-relaxed">
                 <span className="text-mpp-amber font-mono uppercase tracking-wider">Automatic checks:</span>{" "}
-                The proxy re-verifies your endpoint every 24 hours. If verification fails 3 consecutive times, proxy traffic is suspended until you re-verify manually from the management dashboard. Keep the /.well-known/mpp32-verify route live at all times.
+                The proxy re-verifies your endpoint every 24 hours. If verification fails 3 consecutive times, proxy traffic is suspended until you re-verify manually from the management dashboard. Keep the /api/mpp32-verify route live at all times.
               </p>
             </div>
           </section>
@@ -654,6 +656,270 @@ curl https://mpp32.org/api/proxy/your-slug`}</pre>
       {/* ── Agent Integration ── */}
       {activeSection === "Agent Integration" ? (
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-16">
+
+          {/* REST Agent API */}
+          <section id="agent-rest-api">
+            <h2 className="font-display text-2xl font-semibold text-foreground mb-4">REST Agent API</h2>
+            <p className="text-muted-foreground text-sm leading-relaxed mb-4">
+              The fastest way to give an existing agent the ability to call services across all 5 settlement protocols. Create a session, get a rate-limited API key, and call <code className="font-mono text-mpp-amber text-xs">/api/agent/execute</code> with any service slug. The router selects the optimal protocol and forwards 402 challenges from upstream services back to your agent — your wallet signs and retries.
+            </p>
+            <div className="rounded p-3 border-l-2 border-mpp-success/60 bg-mpp-success/5 mb-6">
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                <span className="text-mpp-success font-mono uppercase tracking-wider">Non-custodial:</span>{" "}
+                MPP32 NEVER spends USDC or any other asset on your behalf. Every paid call is settled by the caller's own wallet via the appropriate facilitator (x402 for Solana USDC, Tempo for pathUSD on L2). MPP32 verifies and forwards on-chain receipts; it never holds funds.
+              </p>
+            </div>
+            <p className="text-muted-foreground text-sm leading-relaxed mb-6">
+              Manage sessions visually at the{" "}
+              <Link to="/agent-console" className="text-mpp-amber hover:underline">Agent Console</Link>{" "}
+              or hit the endpoints directly from your stack.
+            </p>
+
+            <h3 className="text-foreground font-semibold text-sm mb-3">Endpoints</h3>
+            <div className="card-surface rounded overflow-hidden mb-6">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-mpp-border">
+                    <th className="text-left px-5 py-3 font-mono text-[10px] text-muted-foreground uppercase tracking-wider">Method</th>
+                    <th className="text-left px-5 py-3 font-mono text-[10px] text-muted-foreground uppercase tracking-wider">Path</th>
+                    <th className="text-left px-5 py-3 font-mono text-[10px] text-muted-foreground uppercase tracking-wider">Description</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-mpp-border">
+                  {[
+                    { method: "GET", path: "/api/agent/protocols", desc: "List protocol statuses (enabled/disabled, network, settlement speed)." },
+                    { method: "POST", path: "/api/agent/sessions", desc: "Create a non-custodial session. Returns an API key to use as X-Agent-Key. Rate-limited to 240 calls/min." },
+                    { method: "GET", path: "/api/agent/sessions/:id", desc: "Session detail: total + settled call counts, on-chain settled volume, success rate, recent transactions with settlement signatures." },
+                    { method: "POST", path: "/api/agent/quote", desc: "Get a cross-protocol price quote. Quotes are informational; payment is signed by the caller's wallet." },
+                    { method: "POST", path: "/api/agent/execute", desc: "Call a service (Auth: X-Agent-Key). Forwards 402 challenges; passes through X-Payment / Authorization headers to upstream for facilitator-verified settlement." },
+                    { method: "GET", path: "/api/agent/services", desc: "Discover all active machine-payable services. Pricing is for caller-signed payment (not custodial debit)." },
+                    { method: "GET", path: "/api/agent/stats", desc: "Aggregate stats: active sessions, total + settled requests, on-chain settled volume." },
+                  ].map((row) => (
+                    <tr key={row.path}>
+                      <td className="px-5 py-3 font-mono text-mpp-amber text-xs">{row.method}</td>
+                      <td className="px-5 py-3 font-mono text-foreground text-xs">{row.path}</td>
+                      <td className="px-5 py-3 text-muted-foreground text-xs">{row.desc}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <h3 className="text-foreground font-semibold text-sm mb-3">Create a session</h3>
+            <div className="card-surface rounded p-4 mb-6">
+              <pre className="font-mono text-xs text-foreground leading-relaxed whitespace-pre-wrap">{`curl -X POST https://mpp32.org/api/agent/sessions \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "agentId":           "my-trading-bot",
+    "agentName":         "Trading Bot",
+    "walletAddress":     "9Pa8yUe...",
+    "preferredProtocol": "x402"
+  }'
+
+# 201 Created
+# {
+#   "data": {
+#     "sessionId":              "clxyz...",
+#     "apiKey":                 "mpp32_agent_<32-hex>",
+#     "walletVerified":         false,
+#     "m32BalanceSnapshot":     1250000,
+#     "projectedDiscountPercent": 40,
+#     "discountActive":         false,
+#     "verificationNotice":     "Wallet stored but ownership is NOT verified. SIWS sign-in coming soon — discounts only apply once verified.",
+#     "custodyDisclosure":      "MPP32 never holds custody of your funds...",
+#     "protocols":              ["tempo", "x402", "acp", "ap2", "agtp"]
+#   }
+# }`}</pre>
+            </div>
+
+            <h3 className="text-foreground font-semibold text-sm mb-3">Execute a paid call (sign with your own wallet)</h3>
+            <p className="text-muted-foreground text-xs leading-relaxed mb-3">
+              The first call returns 402 with the x402 challenge. Sign with your own wallet (e.g. via the <code className="font-mono text-foreground">mppx</code> SDK) and retry with the <code className="font-mono text-foreground">X-Payment</code> header. The facilitator verifies and settles on-chain — MPP32 never spends on your behalf.
+            </p>
+            <div className="card-surface rounded p-4 mb-6">
+              <pre className="font-mono text-xs text-foreground leading-relaxed whitespace-pre-wrap">{`# Step 1: First call returns 402 with the challenge
+curl -X POST https://mpp32.org/api/agent/execute \\
+  -H "Content-Type: application/json" \\
+  -H "X-Agent-Key: mpp32_agent_abc123..." \\
+  -d '{ "service": "intelligence", "body": { "token": "BONK" } }'
+
+# 200 OK with error body — caller must sign and retry
+# {
+#   "data": {
+#     "result": {
+#       "error": {
+#         "code":    "PAYMENT_REQUIRED",
+#         "message": "Payment required. Sign with your own wallet...",
+#         "challenge": {
+#           "statusCode": 402,
+#           "headers":    { "payment-required": "<base64-x402-challenge>" },
+#           "priceQuoted": 0.008
+#         },
+#         "custody": "MPP32 cannot pay upstream services on your behalf."
+#       }
+#     },
+#     "meta": { "paymentMethod": "passthrough_402", "settled": false }
+#   }
+# }
+
+# Step 2: Sign challenge with mppx SDK and retry with X-Payment header
+curl -X POST https://mpp32.org/api/agent/execute \\
+  -H "X-Agent-Key: mpp32_agent_abc123..." \\
+  -H "X-Payment: <base64-signed-payment>" \\
+  -d '{ "service": "intelligence", "body": { "token": "BONK" } }'
+
+# 200 OK
+# {
+#   "data": {
+#     "result": { ...intelligence payload... },
+#     "meta": {
+#       "protocol":              "x402",
+#       "priceQuoted":           0.008,
+#       "priceSettled":          0.0048,
+#       "discountPercent":       40,
+#       "paymentMethod":         "x402",
+#       "settled":               true,
+#       "settlementTxSignature": "5q...solana_tx",
+#       "settlementExplorerUrl": "https://solscan.io/tx/5q...",
+#       "latencyMs":             312
+#     }
+#   }
+# }`}</pre>
+            </div>
+
+            <h3 className="text-foreground font-semibold text-sm mb-3">Test with a free service first (no payment)</h3>
+            <p className="text-muted-foreground text-xs leading-relaxed mb-3">
+              Free public services run without payment — perfect for verifying your API key end-to-end before signing USDC payments.
+              Pass <code className="font-mono text-foreground">"method": "GET"</code> for query-string services.
+            </p>
+            <div className="card-surface rounded p-4 mb-6">
+              <pre className="font-mono text-xs text-foreground leading-relaxed whitespace-pre-wrap">{`curl -X POST https://mpp32.org/api/agent/execute \\
+  -H "X-Agent-Key: mpp32_agent_abc123..." \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "service": "free:dexscreener-search",
+    "method":  "GET",
+    "query":   { "q": "BONK" }
+  }'
+
+# Free service. Returns DexScreener pairs. paymentMethod: 'free', settled: false.
+# Same pattern works for: free:jupiter-price, free:coingecko-ping, free:httpbin`}</pre>
+            </div>
+
+            <h3 className="text-foreground font-semibold text-sm mb-3">Python</h3>
+            <div className="card-surface rounded p-4 mb-6">
+              <pre className="font-mono text-xs text-foreground leading-relaxed whitespace-pre-wrap">{`import requests
+
+BASE = "https://mpp32.org/api/agent"
+
+# 1. Create a session (returns rate-limited API key — non-custodial)
+session = requests.post(f"{BASE}/sessions", json={
+    "agentId": "my-bot",
+}).json()["data"]
+key = session["apiKey"]
+
+# 2. Call any service — Oracle, free, or external — through one endpoint
+resp = requests.post(f"{BASE}/execute",
+    headers={"X-Agent-Key": key},
+    json={"service": "intelligence", "body": {"token": "BONK"}},
+).json()
+
+intel = resp["data"]["result"]["data"]
+print(f"{intel['token']['symbol']}: alpha={intel['alphaScore']}, "
+      f"rug={intel['rugRisk']['level']}, "
+      f"vol24h=\${intel['marketData']['volume24h']:,.0f}")
+print(f"Routed via {resp['data']['meta']['protocol']} "
+      f"in {resp['data']['meta']['latencyMs']}ms")`}</pre>
+            </div>
+
+            <h3 className="text-foreground font-semibold text-sm mb-3">TypeScript / LangChain Tool</h3>
+            <div className="card-surface rounded p-4 mb-6">
+              <pre className="font-mono text-xs text-foreground leading-relaxed whitespace-pre-wrap">{`import { tool } from "@langchain/core/tools";
+import { z } from "zod";
+
+const MPP32_KEY = process.env.MPP32_AGENT_KEY!;
+
+export const tokenIntelligenceTool = tool(
+  async ({ token }) => {
+    const res = await fetch("https://mpp32.org/api/agent/execute", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Agent-Key": MPP32_KEY,
+      },
+      body: JSON.stringify({ service: "intelligence", body: { token } }),
+    });
+    const json = await res.json();
+    return JSON.stringify(json.data.result.data);
+  },
+  {
+    name: "token_intelligence",
+    description: "Get real-time alpha score, rug risk, whale activity, and market data for any Solana token. Input: token symbol or address.",
+    schema: z.object({ token: z.string() }),
+  }
+);`}</pre>
+            </div>
+
+            <h3 className="text-foreground font-semibold text-sm mb-3">M32 Discounts on Agent Sessions</h3>
+            <div className="space-y-2 mb-4">
+              {[
+                { tier: "No M32 / Unverified wallet", price: "$0.008", note: "Standard" },
+                { tier: "250K+ M32 (verified)", price: "$0.0064", note: "20% off" },
+                { tier: "1M+ M32 (verified)", price: "$0.0048", note: "40% off" },
+              ].map((t) => (
+                <div key={t.tier} className="rounded p-3 flex items-center justify-between bg-mpp-bg border border-mpp-border">
+                  <span className="text-foreground text-sm">{t.tier}</span>
+                  <div className="flex items-center gap-3">
+                    <span className="font-mono text-mpp-amber text-sm">{t.price}</span>
+                    <span className="text-muted-foreground text-xs">{t.note}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <p className="text-muted-foreground text-xs leading-relaxed">
+              Discounts apply only to <strong className="text-foreground">verified</strong> wallets. Submitting an address alone does not authorize spending — wallet ownership must be proven via SIWS (Sign-In With Solana, ed25519 signature). The verified discount is applied to the real on-chain payment your wallet signs; MPP32 never spends or rebates funds on your behalf.
+            </p>
+          </section>
+
+          {/* What MPP32 does NOT do — trust differentiator */}
+          <section id="agent-not-custodial">
+            <h2 className="font-display text-2xl font-semibold text-foreground mb-4">What MPP32 does NOT do</h2>
+            <p className="text-muted-foreground text-sm leading-relaxed mb-6">
+              MPP32 is a <strong className="text-foreground">non-custodial settlement router</strong>. We are deliberate about what we will and will not do — because the alternative would make us a money transmitter and would put your funds at risk.
+            </p>
+            <div className="card-surface rounded p-5 space-y-3 mb-4">
+              {[
+                {
+                  title: "We do NOT custody funds",
+                  body: "No MPP32 wallet holds your USDC, pathUSD, or any other asset. Every paid call is signed by your own wallet using the standard challenge-response flow defined by x402, Tempo, ACP, AP2, or AGTP.",
+                },
+                {
+                  title: "We do NOT pre-fund or extend credit",
+                  body: "There is no MPP32-managed balance you top up and draw down against. The 'session' is a rate-limited API key plus analytics — not a wallet.",
+                },
+                {
+                  title: "We do NOT spend on your behalf",
+                  body: "When an upstream returns 402, we forward the challenge to your agent. Your agent's wallet signs and retries. We verify the receipt; we never construct or sign the payment.",
+                },
+                {
+                  title: "We do NOT commingle funds",
+                  body: "Settlement transactions move USDC directly from the caller's address to the provider's payTo address, on-chain. No funds ever touch an MPP32-controlled account.",
+                },
+                {
+                  title: "We do NOT refund or chargeback",
+                  body: "Because we never received your money. If a service does not deliver, dispute it on-chain or with the provider directly.",
+                },
+              ].map((item) => (
+                <div key={item.title} className="border-l-2 border-mpp-success/60 pl-3">
+                  <p className="text-foreground text-sm font-semibold mb-0.5">{item.title}</p>
+                  <p className="text-muted-foreground text-xs leading-relaxed">{item.body}</p>
+                </div>
+              ))}
+            </div>
+            <p className="text-muted-foreground text-xs leading-relaxed">
+              Self-custody is a feature, not a limitation. It means MPP32 cannot lose your money because it never has it — and it keeps the integration outside the scope of money-transmitter regulations (FinCEN MSB and equivalents). We pass on that compliance posture to you.
+            </p>
+          </section>
 
           {/* Overview */}
           <section id="agent-overview">

@@ -4,11 +4,12 @@ import { Menu, X, ChevronRight, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navLinks = [
+  { label: "Agent", href: "/agent-hub" },
   { label: "Proxy", href: "/build" },
   { label: "Oracle", href: "/oracle" },
   { label: "Use Cases", href: "/use-cases" },
   { label: "Ecosystem", href: "/ecosystem" },
-  { label: "Manage API", href: "/manage" },
+  { label: "Provider Manage", href: "/manage" },
   { label: "Roadmap", href: "/roadmap" },
   { label: "API", href: "/docs" },
   { label: "Pricing", href: "/pricing" },
@@ -66,9 +67,9 @@ export function Header() {
             >
               <img src="https://www.geckoterminal.com/favicon.ico" alt="GeckoTerminal" width={22} height={22} className="rounded-sm" />
             </a>
-            <Link to="/dashboard">
+            <Link to="/agent-console">
               <span className="text-sm text-muted-foreground hover:text-foreground transition-colors cursor-pointer">
-                Console
+                Agent Console
               </span>
             </Link>
             <Link to="/playground">
@@ -111,11 +112,11 @@ export function Header() {
               </Link>
             ))}
             <Link
-              to="/dashboard"
+              to="/agent-console"
               onClick={() => setMobileOpen(false)}
               className="flex items-center justify-between py-2.5 text-sm border-b border-mpp-border/50 text-muted-foreground"
             >
-              Console
+              Agent Console
               <ChevronRight className="w-4 h-4 text-muted-foreground" />
             </Link>
             <a

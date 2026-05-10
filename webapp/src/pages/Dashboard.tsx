@@ -38,7 +38,7 @@ export default function Dashboard() {
               <span className="font-display text-base font-semibold text-foreground">MPP32</span>
             </Link>
             <div className="hidden sm:block w-px h-4 bg-mpp-border" />
-            <span className="hidden sm:block text-muted-foreground text-xs font-mono">Query Console</span>
+            <span className="hidden sm:block text-muted-foreground text-xs font-mono">Query History</span>
           </div>
           <Link to="/playground">
             <button className="btn-amber flex items-center gap-1.5 text-xs px-3 py-1.5 rounded font-semibold">
@@ -50,8 +50,8 @@ export default function Dashboard() {
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8">
-          <h1 className="font-display text-2xl font-semibold text-foreground mb-1">Query Console</h1>
-          <p className="text-muted-foreground text-sm">Your recent intelligence queries, stored locally in your browser.</p>
+          <h1 className="font-display text-2xl font-semibold text-foreground mb-1">Query History</h1>
+          <p className="text-muted-foreground text-sm">Your recent Oracle Playground queries, stored locally in your browser. For agent session management, see the <Link to="/agent-console" className="text-mpp-amber hover:opacity-80 underline-offset-2 hover:underline">Agent Console</Link>.</p>
         </div>
 
         {queries.length === 0 ? (

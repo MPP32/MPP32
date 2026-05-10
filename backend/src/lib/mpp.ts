@@ -28,6 +28,7 @@ import {
   isAGTPRequest,
   getAGTPHeaders,
   getAGTPIntentMethod,
+  getAGTPSignature,
   createAGTPChallenge,
   verifyAGTPAgent,
 } from './agtp.js'
@@ -113,11 +114,13 @@ async function verifyAuthorizationLayers(c: any, amount: string) {
     )
   }
 
-  // Layer 2: AGTP agent identity
+  // Layer 2: AGTP agent identity (requires cryptographic signature)
   if (isAGTPRequest(c) && agtpActive) {
     const agtpHeaders = getAGTPHeaders(c)
     if (agtpHeaders) {
-      const agtpResult = await verifyAGTPAgent(agtpHeaders, resource, amount)
+      const signatureData = getAGTPSignature(c)
+      const httpMethod = c.req.method
+      const agtpResult = await verifyAGTPAgent(agtpHeaders, resource, amount, httpMethod, signatureData)
       if (!agtpResult.verified) {
         return c.json(
           { error: { message: agtpResult.error ?? 'AGTP agent verification failed', code: agtpResult.errorCode ?? 'AGTP_AGENT_UNVERIFIED' } },
@@ -175,6 +178,18 @@ export function universalProtocolCharge(amount: string, recipientOverride?: stri
         )
       }
       c.set('paymentMethod' as never, 'x402' as never)
+      c.set('settlementTxSignature' as never, (result.txSignature ?? '') as never)
+      if (result.txSignature) {
+        c.header('X-Payment-Response', Buffer.from(JSON.stringify({
+          method: 'x402',
+          txSignature: result.txSignature,
+          payer: result.payer,
+          network: result.network,
+          amount,
+        })).toString('base64'))
+        c.header('X-Settlement-Tx', result.txSignature)
+        c.header('X-Settlement-Method', 'x402')
+      }
       await next()
       return
     }
@@ -183,6 +198,7 @@ export function universalProtocolCharge(amount: string, recipientOverride?: stri
     const hasTempoAuth = !!c.req.header('authorization')?.startsWith('Payment ')
     if (hasTempoAuth) {
       c.set('paymentMethod' as never, 'tempo' as never)
+      c.header('X-Settlement-Method', 'tempo')
       return tempoCharge(c, next)
     }
 
@@ -350,6 +366,35 @@ export function rateLimit(opts: { name: string; max: number; windowMs: number })
     const now = Date.now()
     let w = store.get(ip)
     if (!w || w.resetAt <= now) { w = { count: 0, resetAt: now + opts.windowMs }; store.set(ip, w) }
+    w.count++
+
+    c.header('X-RateLimit-Limit', String(opts.max))
+    c.header('X-RateLimit-Remaining', String(Math.max(0, opts.max - w.count)))
+    c.header('X-RateLimit-Reset', String(Math.ceil(w.resetAt / 1000)))
+
+    if (w.count > opts.max) {
+      const retryAfter = Math.ceil((w.resetAt - now) / 1000)
+      c.header('Retry-After', String(retryAfter))
+      return c.json(
+        { error: { message: 'Too many requests. Please try again later.', code: 'RATE_LIMITED' } },
+        429,
+      )
+    }
+    await next()
+  })
+}
+
+// Rate limit keyed off the X-Agent-Key header (per-session) instead of IP.
+// Falls back to IP if no key present so unauthenticated requests still get limited.
+export function rateLimitByKey(opts: { name: string; max: number; windowMs: number; headerName?: string }) {
+  const store = getStore(opts.name)
+  const headerName = opts.headerName ?? 'x-agent-key'
+  return createMiddleware(async (c, next) => {
+    const headerKey = c.req.header(headerName)
+    const key = headerKey ? `key:${headerKey}` : `ip:${getClientIp(c)}`
+    const now = Date.now()
+    let w = store.get(key)
+    if (!w || w.resetAt <= now) { w = { count: 0, resetAt: now + opts.windowMs }; store.set(key, w) }
     w.count++
 
     c.header('X-RateLimit-Limit', String(opts.max))

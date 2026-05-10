@@ -1,27 +1,70 @@
 {
   "name": "mpp32-mcp-server",
-  "version": "1.0.0",
-  "description": "MCP server for MPP32 — lets AI agents discover and call machine-payable APIs",
+  "version": "1.0.3",
+  "description": "The universal API marketplace for AI agents. Discover, pay for, and call any machine-payable API through one MCP server. 5 payment protocols, instant settlement, 30+ categories. Install once, access every paid API in the ecosystem.",
   "type": "module",
   "bin": {
     "mpp32-mcp-server": "./dist/index.js"
   },
   "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "mcp",
+    "mcp-server",
+    "model-context-protocol",
     "mpp",
     "mpp32",
     "machine-payments",
     "ai-agents",
+    "agent-payments",
+    "micropayments",
     "solana",
-    "tempo"
+    "usdc",
+    "x402",
+    "tempo",
+    "acp",
+    "agent-commerce",
+    "claude",
+    "openai",
+    "llm",
+    "autonomous-agents",
+    "crypto",
+    "defi",
+    "token-intelligence",
+    "api-marketplace"
   ],
   "license": "MIT",
+  "author": "MPP32 <admin@mpp32.org> (https://mpp32.org)",
+  "homepage": "https://mpp32.org",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MPP32/MPP32"
+  },
+  "bugs": {
+    "url": "https://github.com/MPP32/MPP32/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
     "zod": "^3.23.0"

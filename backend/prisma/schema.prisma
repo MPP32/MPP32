@@ -75,6 +75,24 @@ model Submission {
   @@index([creatorEmail])
 }
 
+model CheckoutSession {
+  id          String    @id @default(cuid())
+  sessionId   String    @unique
+  resource    String
+  amount      String
+  currency    String    @default("USD")
+  status      String    @default("pending")
+  merchantId  String?
+  agentId     String?
+  metadata    String?
+  expiresAt   DateTime
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([status])
+  @@index([expiresAt])
+}
+
 model ContactMessage {
   id        String   @id @default(cuid())
   name      String
@@ -86,4 +104,115 @@ model ContactMessage {
 
   @@index([createdAt])
   @@index([isRead])
+}
+
+model AgentSession {
+  id              String    @id @default(cuid())
+  agentId         String
+  agentName       String?
+  walletAddress   String?
+  walletVerified  Boolean   @default(false)
+  walletNonce     String?
+  walletSignature String?
+  nonceIssuedAt   DateTime?
+  proofVerifiedAt DateTime?
+  preferredProtocol String?
+  totalRequests   Int       @default(0)
+  successfulRequests Int    @default(0)
+  apiKey          String    @unique
+  isActive        Boolean   @default(true)
+  lastActivityAt  DateTime?
+  expiresAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  transactions    AgentTransaction[]
+
+  @@index([agentId])
+  @@index([apiKey])
+  @@index([isActive])
+  @@index([createdAt])
+}
+
+model AgentTransaction {
+  id                    String   @id @default(cuid())
+  sessionId             String
+  service               String
+  protocolUsed          String
+  paymentMethod         String?
+  priceQuoted           Float    @default(0)
+  discountPercent       Float    @default(0)
+  priceSettled          Float    @default(0)
+  settled               Boolean  @default(false)
+  settlementTxSignature String?
+  statusCode            Int
+  latencyMs             Int
+  success               Boolean
+  errorMessage          String?
+  requestPayload        String?
+  createdAt             DateTime @default(now())
+
+  session         AgentSession @relation(fields: [sessionId], references: [id])
+
+  @@index([sessionId, createdAt])
+  @@index([protocolUsed])
+  @@index([paymentMethod])
+  @@index([service])
+  @@index([settled])
+  @@index([createdAt])
+}
+
+model ExternalService {
+  id              String   @id @default(cuid())
+  source          String
+  sourceId        String
+  slug            String   @unique
+  name            String
+  description     String?
+  category        String?
+  endpointUrl     String?
+  websiteUrl      String?
+  protocol        String
+  protocols       String?
+  network         String?
+  asset           String?
+  payTo           String?
+  pricePerQuery   Float?
+  priceCurrency   String   @default("USD")
+  scheme          String?
+  tags            String?
+  metadata        String?
+  iconUrl         String?
+  popularity      Int      @default(0)
+  verified        Boolean  @default(false)
+  active          Boolean  @default(true)
+  firstSeenAt     DateTime @default(now())
+  lastSeenAt      DateTime @default(now())
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([source, sourceId])
+  @@index([source])
+  @@index([protocol])
+  @@index([category])
+  @@index([active])
+  @@index([popularity])
+  @@index([lastSeenAt])
+}
+
+model CatalogCrawlRun {
+  id            String   @id @default(cuid())
+  source        String
+  status        String
+  itemsFound    Int      @default(0)
+  itemsAdded    Int      @default(0)
+  itemsUpdated  Int      @default(0)
+  itemsRemoved  Int      @default(0)
+  durationMs    Int      @default(0)
+  errorMessage  String?
+  startedAt     DateTime @default(now())
+  finishedAt    DateTime?
+
+  @@index([source, startedAt])
+  @@index([status])
 }

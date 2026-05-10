@@ -31,6 +31,9 @@ import Roadmap from "./pages/Roadmap";
 import Manage from "./pages/Manage";
 import Whitepaper from "./pages/Whitepaper";
 import Messages from "./pages/Messages";
+import AgentHub from "./pages/AgentHub";
+import AgentConsole from "./pages/AgentConsole";
+import Catalog from "./pages/Catalog";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -72,6 +75,9 @@ const App = () => (
             <Route path="/roadmap" element={<MainLayout><Roadmap /></MainLayout>} />
             <Route path="/whitepaper" element={<MainLayout><Whitepaper /></MainLayout>} />
             <Route path="/messages" element={<MainLayout><Messages /></MainLayout>} />
+            <Route path="/agent-hub" element={<MainLayout><AgentHub /></MainLayout>} />
+            <Route path="/agent-console" element={<MainLayout><AgentConsole /></MainLayout>} />
+            <Route path="/catalog" element={<MainLayout><Catalog /></MainLayout>} />
             <Route path="/manage" element={<Manage />} />
             <Route path="/dashboard" element={<Dashboard />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
