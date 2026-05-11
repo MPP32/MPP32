@@ -3,8 +3,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { signX402Payment } from "./x402-signers.js";
 
-const SERVER_VERSION = "1.1.2";
+const SERVER_VERSION = "1.2.4";
 
 // ── Env loading: trim and sanitize aggressively ─────────────────────────────
 // Copy-paste from Claude Desktop / Cursor / Windsurf JSON config UIs frequently
@@ -142,6 +143,24 @@ const SOLANA_PRIVATE_KEY: string | undefined = (() => {
   return v;
 })();
 
+// Optional override: when both an EVM and a Solana key are configured, this
+// decides which network to use for mixed challenges. Accepts:
+//   "solana" (or any "solana:*" CAIP-2), "base", "evm", "ethereum".
+// Defaults to undefined — pickRequirements then falls back to its own rules.
+const PREFERRED_NETWORK: string | undefined = (() => {
+  const v = readEnv("MPP32_PREFERRED_NETWORK");
+  if (!v) return undefined;
+  const lower = v.toLowerCase();
+  const allowed = ["solana", "base", "evm", "ethereum"];
+  if (!allowed.some((a) => lower === a || lower.startsWith(a))) {
+    console.error(
+      `[mpp32] MPP32_PREFERRED_NETWORK="${v}" not recognized. Allowed: ${allowed.join(", ")} (or full CAIP-2 like solana:5eykt...). Ignoring.`,
+    );
+    return undefined;
+  }
+  return lower;
+})();
+
 // Wrap fetch with a default timeout. AbortSignal.timeout exists in Node 20+,
 // but we ship for Node 18+, so we build the signal ourselves.
 async function fetchWithTimeout(
@@ -197,6 +216,10 @@ interface FederatedServicesResponse {
     services: FederatedService[];
     total: number;
     counts: { native: number; external: number };
+    totalAvailable?: { native: number; external: number; combined: number };
+    limit?: number;
+    truncated?: boolean;
+    hint?: string;
     protocols: string[];
   };
 }
@@ -249,11 +272,128 @@ function isHttpCallable(svc: FederatedService): boolean {
   return /^https?:\/\//.test(url);
 }
 
+// ── Tool 0: get_mpp32_diagnostics ───────────────────────────────────────────
+// Lets the user (and Claude) see exactly what the MCP process detected at
+// startup. The single most common failure mode is "I set the env var but it
+// didn't reach the server" — wrong claude_desktop_config.json file edited,
+// `env` block at the wrong level, typo in the variable name, stale process
+// from an incomplete restart. This tool answers all of those without
+// asking the user to dig through MCP log files.
+
+function describeEnvVarStatus(name: string, value: string | undefined): string {
+  const raw = process.env[name];
+  if (raw === undefined) return `${name}: NOT SET (variable absent from MCP process env)`;
+  if (raw.length === 0) return `${name}: EMPTY (set but blank)`;
+  if (value === undefined) {
+    return `${name}: REJECTED (raw length ${raw.length}, but failed validation — check startup log for reason)`;
+  }
+  // Show a short, non-secret fingerprint so the user can confirm it's the
+  // right value without us exfiltrating the key.
+  const fingerprint =
+    value.length <= 12
+      ? `${value.length} chars`
+      : `${value.slice(0, 6)}…${value.slice(-4)} (${value.length} chars)`;
+  return `${name}: SET (${fingerprint})`;
+}
+
+server.tool(
+  "get_mpp32_diagnostics",
+  "Report what the mpp32-mcp-server detected at startup: version, API URL, env vars (MPP32_AGENT_KEY, MPP32_SOLANA_PRIVATE_KEY, MPP32_PRIVATE_KEY, MPP32_PREFERRED_NETWORK), and a live API connectivity check. Use this FIRST if payments fail with 'no key configured' even though you set one in claude_desktop_config.json.",
+  {},
+  async () => {
+    // Live connectivity probe so the user knows whether the *backend* is
+    // reachable too — not just whether their env loaded.
+    let apiReachable: string;
+    try {
+      const probe = await fetchWithTimeout(`${API_URL}/api/agent/protocols`, {
+        timeoutMs: 5_000,
+      });
+      apiReachable = probe.ok
+        ? `OK (${probe.status})`
+        : `Reachable but returned ${probe.status}`;
+    } catch (err) {
+      apiReachable = `UNREACHABLE: ${err instanceof Error ? err.message : String(err)}`;
+    }
+
+    const haveAnyKey = !!(SOLANA_PRIVATE_KEY || PRIVATE_KEY);
+    const readyToPay = !!AGENT_KEY && haveAnyKey;
+
+    const lines = [
+      `**mpp32-mcp-server diagnostics**`,
+      ``,
+      `Version: ${SERVER_VERSION}`,
+      `API URL: ${API_URL}`,
+      `API reachable: ${apiReachable}`,
+      `Timeout: ${TIMEOUT_MS}ms`,
+      `Node: ${process.version} on ${process.platform}/${process.arch}`,
+      ``,
+      `**Environment variable detection** (values are fingerprinted, never returned in full):`,
+      ``,
+      describeEnvVarStatus("MPP32_AGENT_KEY", AGENT_KEY),
+      describeEnvVarStatus("MPP32_SOLANA_PRIVATE_KEY", SOLANA_PRIVATE_KEY),
+      describeEnvVarStatus("MPP32_PRIVATE_KEY", PRIVATE_KEY),
+      `MPP32_PREFERRED_NETWORK: ${PREFERRED_NETWORK ?? "not set (auto: prefer the only key you have)"}`,
+      ``,
+      `**Capabilities:**`,
+      `- Catalog browsing: yes (always available)`,
+      `- Federated service execution: ${AGENT_KEY ? "yes" : "no — set MPP32_AGENT_KEY"}`,
+      `- x402 (USDC on Solana) payment: ${SOLANA_PRIVATE_KEY ? "yes" : "no — set MPP32_SOLANA_PRIVATE_KEY"}`,
+      `- x402 (USDC on Base/EVM) payment: ${PRIVATE_KEY ? "yes" : "no — set MPP32_PRIVATE_KEY"}`,
+      ``,
+      `**Ready to pay end-to-end:** ${readyToPay ? "YES — try `query_intelligence` with token=\"M32\" to confirm." : "NO — see the missing items above."}`,
+      ``,
+      `**If a variable shows NOT SET but you set it in claude_desktop_config.json:**`,
+      `1. Confirm the file path Claude Desktop actually reads:`,
+      `   - macOS:   ~/Library/Application Support/Claude/claude_desktop_config.json`,
+      `   - Windows: %APPDATA%\\Claude\\claude_desktop_config.json`,
+      `2. The 'env' block must sit INSIDE the server entry, beside 'command' and 'args' — not at the top level.`,
+      `3. Validate the JSON: a single missing comma silently throws the whole file out.`,
+      `4. Fully quit Claude Desktop:`,
+      `   - macOS: Cmd+Q (or Claude menu → Quit)`,
+      `   - Windows: right-click the system-tray icon → Quit (closing the window is NOT enough)`,
+      `5. Re-open Claude Desktop. The new MCP child process inherits env from the JSON.`,
+      `6. Call get_mpp32_diagnostics again. If it STILL shows NOT SET, the JSON did not load — check the Claude Desktop log for a parse error.`,
+      ``,
+      `**On Windows specifically:** the value must NOT include surrounding quotes inside the JSON string. Bad: "\\"mpp32_agent_abc...\\"". Good: "mpp32_agent_abc...".`,
+    ];
+    return {
+      content: [{ type: "text" as const, text: lines.join("\n") }],
+    };
+  },
+);
+
+// Back-compat alias. Older docs and skills say `debug_mpp32`.
+server.tool(
+  "debug_mpp32",
+  "Alias for get_mpp32_diagnostics. Reports env-var detection, API connectivity, and ready-to-pay status.",
+  {},
+  async () => {
+    let apiReachable: string;
+    try {
+      const probe = await fetchWithTimeout(`${API_URL}/api/agent/protocols`, { timeoutMs: 5_000 });
+      apiReachable = probe.ok ? `OK (${probe.status})` : `Reachable but returned ${probe.status}`;
+    } catch (err) {
+      apiReachable = `UNREACHABLE: ${err instanceof Error ? err.message : String(err)}`;
+    }
+    const readyToPay = !!AGENT_KEY && !!(SOLANA_PRIVATE_KEY || PRIVATE_KEY);
+    const lines = [
+      `mpp32-mcp-server v${SERVER_VERSION} (${process.platform}/${process.arch}, Node ${process.version})`,
+      `API: ${API_URL} — ${apiReachable}`,
+      describeEnvVarStatus("MPP32_AGENT_KEY", AGENT_KEY),
+      describeEnvVarStatus("MPP32_SOLANA_PRIVATE_KEY", SOLANA_PRIVATE_KEY),
+      describeEnvVarStatus("MPP32_PRIVATE_KEY", PRIVATE_KEY),
+      `MPP32_PREFERRED_NETWORK: ${PREFERRED_NETWORK ?? "not set"}`,
+      `Ready to pay: ${readyToPay ? "YES" : "NO"}`,
+    ];
+    return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+  },
+);
+
 // ── Tool 1: list_mpp32_services ─────────────────────────────────────────────
 
 server.tool(
   "list_mpp32_services",
-  "Browse the MPP32 federated catalog of machine-payable APIs and data services. Includes native MPP32 services (callable end-to-end through this MCP), the x402 Bazaar (USDC on Solana), curated free APIs (DexScreener, Jupiter, CoinGecko health, httpbin, etc.), and the public MCP Registry (npx-installable servers; listing-only). Each result indicates whether it is callable through `call_mpp32_endpoint` or listing-only. Use the `category`, `q`, or `source` filters to narrow down.",
+  "Browse the MPP32 federated catalog of 4,500+ machine-payable APIs and data services. Includes native MPP32 services (callable end-to-end through this MCP), the x402 Bazaar (USDC on Solana), curated free APIs (DexScreener, Jupiter, CoinGecko health, httpbin, etc.), and the public MCP Registry (npx-installable servers; listing-only). Each result indicates whether it is callable through `call_mpp32_endpoint` or listing-only. The catalog is large (~4,500 entries) — by default a single call returns up to 100 results and the response will tell you the true total and whether the page was truncated. Use `q` (free-text search), `category`, `source`, or `protocol` to narrow down, or raise `limit` (max 500) for broader pages.",
   {
     category: z
       .string()
@@ -339,17 +479,24 @@ server.tool(
       });
 
       const counts = json.data.counts;
+      const totalAvailable = json.data.totalAvailable;
       const callableCount = services.filter(isHttpCallable).length;
+      const sourcesLine = totalAvailable
+        ? `**Sources:** ${counts.native} native + ${counts.external} external (of ${totalAvailable.combined} total available in catalog). **Callable through this MCP:** ${callableCount}.`
+        : `**Sources:** ${counts.native} native + ${counts.external} external. **Callable through this MCP:** ${callableCount}.`;
       const header = [
         `# MPP32 Federated Catalog — ${services.length} result${services.length !== 1 ? "s" : ""}`,
         ``,
-        `**Sources:** ${counts.native} native + ${counts.external} external. **Callable through this MCP:** ${callableCount}.`,
+        sourcesLine,
+        json.data.truncated && json.data.hint ? `\n> ⚠️ ${json.data.hint}` : ``,
         ``,
         AGENT_KEY
           ? `Calls through \`call_mpp32_endpoint\` are tracked in your dashboard at ${API_URL}/agent-console (your X-Agent-Key is set).`
           : `**Tip:** set \`MPP32_AGENT_KEY\` in your MCP config to track usage at ${API_URL}/agent-console. Get a key at ${API_URL}/agent-console.`,
         ``,
-      ].join("\n");
+      ]
+        .filter((l) => l !== ``)
+        .join("\n");
 
       return {
         content: [{ type: "text" as const, text: header + "\n" + lines.join("\n\n") }],
@@ -371,15 +518,21 @@ server.tool(
 
 server.tool(
   "call_mpp32_endpoint",
-  "Call any HTTP-callable service in the MPP32 federated catalog. Free services return immediately. Paid services return a 402 challenge that this tool will sign and retry automatically when a payment key (MPP32_SOLANA_PRIVATE_KEY for x402/USDC, MPP32_PRIVATE_KEY for Tempo/pathUSD) is configured. Set MPP32_AGENT_KEY for dashboard tracking. Use `list_mpp32_services` first to find a slug. Listing-only entries (npx-installable MCP servers, x402 Bazaar non-mirrored items) cannot be called through this tool — install them directly per the catalog instructions.",
+  "Call any HTTP-callable service in the MPP32 federated catalog. Free services return immediately. Paid services return a 402 challenge that this tool will sign and retry automatically when a payment key (MPP32_SOLANA_PRIVATE_KEY for x402-on-Solana, MPP32_PRIVATE_KEY for x402-on-Base/Ethereum and Tempo pathUSD) is configured. Set MPP32_AGENT_KEY for dashboard tracking. Use `list_mpp32_services` first to find a slug. Many catalog entries store only the upstream BASE URL (e.g. `https://api.exa.ai`) — pass the upstream path (e.g. `/search`) via the `path` argument when calling those. Listing-only entries (npx-installable MCP servers, etc.) cannot be called through this tool.",
   {
     slug: z
       .string()
-      .describe("Service slug from `list_mpp32_services` (e.g. 'mpp32-intelligence')."),
+      .describe("Service slug from `list_mpp32_services` (e.g. 'curated:exa', 'mpp32-intelligence')."),
     method: z
       .enum(["GET", "POST", "PUT", "DELETE"])
       .default("POST")
       .describe("HTTP method."),
+    path: z
+      .string()
+      .optional()
+      .describe(
+        "Upstream path appended to the service's base URL (e.g. '/search' for Exa, '/v1/chat/completions' for OpenAI). Leave empty for catalog entries that already store a full path, or for native MPP32 services. Always begins with '/'.",
+      ),
     body: z
       .union([z.string(), z.record(z.unknown())])
       .optional()
@@ -389,7 +542,7 @@ server.tool(
       .optional()
       .describe("URL query parameters as key-value pairs."),
   },
-  async ({ slug, method, body, query }) => {
+  async ({ slug, method, path, body, query }) => {
     // Normalize body to an object so it can be JSON.stringified by the upstream call
     let parsedBody: unknown = body;
     if (typeof body === "string") {
@@ -401,10 +554,10 @@ server.tool(
     }
 
     if (AGENT_KEY) {
-      return await callViaAgentExecute(slug, method, parsedBody, query);
+      return await callViaAgentExecute(slug, method, parsedBody, query, path);
     }
     // Legacy path — only works for native services with payment keys
-    return await callViaLegacyProxy(slug, method, parsedBody, query);
+    return await callViaLegacyProxy(slug, method, parsedBody, query, path);
   },
 );
 
@@ -448,6 +601,7 @@ async function callViaAgentExecute(
   method: string,
   body: unknown,
   query: Record<string, string> | undefined,
+  path?: string,
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
   try {
     const execUrl = new URL("/api/agent/execute", API_URL).toString();
@@ -456,6 +610,7 @@ async function callViaAgentExecute(
       method,
       ...(body !== undefined ? { body } : {}),
       ...(query ? { query } : {}),
+      ...(path ? { path } : {}),
     });
 
     // Round 1: no payment headers
@@ -527,14 +682,18 @@ async function signAndRetry(
   const paymentHeaders: Record<string, string> = {};
   let usedProtocol = "";
 
-  // Prefer x402 if Solana key present and server offered Payment-Required
-  if (challenge.paymentRequired && SOLANA_PRIVATE_KEY) {
+  // Prefer x402 if a payment-required challenge is present AND we hold a key
+  // for *either* the SVM or EVM side. The signer module inspects the
+  // challenge's `network` field and routes to the right signer; we just need
+  // to pass it whichever keys we have.
+  if (challenge.paymentRequired && (SOLANA_PRIVATE_KEY || PRIVATE_KEY)) {
     try {
-      paymentHeaders["X-Payment"] = await completeX402Payment(
-        challenge.paymentRequired,
-        SOLANA_PRIVATE_KEY,
-      );
-      usedProtocol = "USDC (x402)";
+      const completed = await completeX402Payment(challenge.paymentRequired, {
+        solana: SOLANA_PRIVATE_KEY,
+        evm: PRIVATE_KEY,
+      });
+      paymentHeaders["X-Payment"] = completed.xPaymentHeader;
+      usedProtocol = completed.protocolUsed === "x402-evm" ? "USDC (x402, Base)" : "USDC (x402, Solana)";
     } catch (err) {
       // Fall through to Tempo if available
       if (challenge.wwwAuthenticate && PRIVATE_KEY) {
@@ -780,9 +939,13 @@ async function callViaLegacyProxy(
   method: string,
   body: unknown,
   query: Record<string, string> | undefined,
+  path?: string,
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
  try {
   // Without an agent key, only native /api/proxy/<slug> is reachable.
+  // Native services do not need a `path` argument; if one is passed, we
+  // ignore it here. (The agent-execute path forwards it for external entries.)
+  void path;
   // We fetch /info first to detect that the slug exists as a native service.
   const infoUrl = new URL(`/api/proxy/${encodeURIComponent(slug)}/info`, API_URL).toString();
   const infoRes = await fetchWithTimeout(infoUrl);
@@ -860,10 +1023,14 @@ async function callViaLegacyProxy(
 
   const paymentHeaders: Record<string, string> = {};
   let usedProtocol = "";
-  if (paymentRequired && SOLANA_PRIVATE_KEY) {
+  if (paymentRequired && (SOLANA_PRIVATE_KEY || PRIVATE_KEY)) {
     try {
-      paymentHeaders["X-Payment"] = await completeX402Payment(paymentRequired, SOLANA_PRIVATE_KEY);
-      usedProtocol = "USDC (x402)";
+      const completed = await completeX402Payment(paymentRequired, {
+        solana: SOLANA_PRIVATE_KEY,
+        evm: PRIVATE_KEY,
+      });
+      paymentHeaders["X-Payment"] = completed.xPaymentHeader;
+      usedProtocol = completed.protocolUsed === "x402-evm" ? "USDC (x402, Base)" : "USDC (x402, Solana)";
     } catch (err) {
       if (wwwAuth && PRIVATE_KEY) {
         const parsed = parseWwwAuthenticate(wwwAuth);
@@ -1002,10 +1169,14 @@ async function legacyIntelligenceCall(
   const paymentHeaders: Record<string, string> = {};
   let usedProtocol = "";
 
-  if (paymentRequired && SOLANA_PRIVATE_KEY) {
+  if (paymentRequired && (SOLANA_PRIVATE_KEY || PRIVATE_KEY)) {
     try {
-      paymentHeaders["X-Payment"] = await completeX402Payment(paymentRequired, SOLANA_PRIVATE_KEY);
-      usedProtocol = "USDC (x402)";
+      const completed = await completeX402Payment(paymentRequired, {
+        solana: SOLANA_PRIVATE_KEY,
+        evm: PRIVATE_KEY,
+      });
+      paymentHeaders["X-Payment"] = completed.xPaymentHeader;
+      usedProtocol = completed.protocolUsed === "x402-evm" ? "USDC (x402, Base)" : "USDC (x402, Solana)";
     } catch (x402Err) {
       if (wwwAuth && PRIVATE_KEY) {
         try {
@@ -1023,7 +1194,7 @@ async function legacyIntelligenceCall(
       } else {
         return {
           content: [
-            { type: "text" as const, text: `x402 payment failed: ${x402Err instanceof Error ? x402Err.message : String(x402Err)}. Check Solana wallet balance.` },
+            { type: "text" as const, text: `x402 payment failed: ${x402Err instanceof Error ? x402Err.message : String(x402Err)}. Check that the wallet for the challenge network has sufficient USDC balance.` },
           ],
         };
       }
@@ -1136,81 +1307,35 @@ async function completeTempoPayment(
   }
 }
 
+interface CompletedX402Payment {
+  xPaymentHeader: string;
+  network: string;
+  protocolUsed: "x402-svm" | "x402-evm";
+}
+
+// Build a real, x402-spec-compliant payment payload from the server's
+// Payment-Required challenge. For Solana-family networks, this produces a
+// base64 partially-signed VersionedTransaction (3 instructions, fee-payer
+// slot reserved for the facilitator). For Base/Base-Sepolia/Ethereum, it
+// produces an EIP-3009 transferWithAuthorization signature. Returns the
+// envelope ready to drop into the `X-Payment` HTTP header.
 async function completeX402Payment(
   paymentRequiredHeader: string,
-  solanaPrivateKey: string,
-): Promise<string> {
-  let requirements: Record<string, unknown>;
-  try {
-    requirements = JSON.parse(
-      Buffer.from(paymentRequiredHeader, "base64").toString("utf-8"),
-    );
-  } catch {
-    throw new Error("Could not decode Payment-Required header");
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let solanaWeb3: any;
-  try {
-    const pkg = "@solana/web3.js";
-    solanaWeb3 = await import(pkg);
-  } catch {
-    throw new Error("x402 payment requires @solana/web3.js: npm install @solana/web3.js");
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let keypair: any;
-  try {
-    if (solanaPrivateKey.startsWith("[")) {
-      keypair = solanaWeb3.Keypair.fromSecretKey(
-        new Uint8Array(JSON.parse(solanaPrivateKey)),
-      );
-    } else if (/^[0-9a-fA-F]+$/.test(solanaPrivateKey) && solanaPrivateKey.length % 2 === 0) {
-      keypair = solanaWeb3.Keypair.fromSecretKey(
-        new Uint8Array(Buffer.from(solanaPrivateKey, "hex")),
-      );
-    } else {
-      const bs58Pkg = "bs58";
-      const bs58 = await import(bs58Pkg);
-      keypair = solanaWeb3.Keypair.fromSecretKey(bs58.default.decode(solanaPrivateKey));
-    }
-  } catch (err) {
-    throw new Error(
-      `Could not decode Solana private key: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-
-  const payload = {
-    x402Version: 1,
-    scheme: (requirements.scheme as string) ?? "exact",
-    network:
-      (requirements.network as string) ?? "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
-    payload: {
-      signature: "",
-      from: keypair.publicKey.toBase58(),
-      amount: requirements.maxAmountRequired,
-      asset: requirements.asset,
-      payTo: requirements.payTo,
-      nonce: Date.now().toString(),
-    },
+  keys: { solana?: string; evm?: string },
+): Promise<CompletedX402Payment> {
+  const solanaRpcUrl = readEnv("MPP32_SOLANA_RPC_URL");
+  const result = await signX402Payment({
+    paymentRequiredHeader,
+    solanaKey: keys.solana,
+    evmKey: keys.evm,
+    solanaRpcUrl,
+    preferredNetwork: PREFERRED_NETWORK,
+  });
+  return {
+    xPaymentHeader: result.xPaymentHeader,
+    network: result.network,
+    protocolUsed: result.protocolUsed,
   };
-
-  const message = JSON.stringify(payload.payload);
-  const messageBytes = new TextEncoder().encode(message);
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let tweetnacl: any;
-  try {
-    const pkg = "tweetnacl";
-    tweetnacl = await import(pkg);
-  } catch {
-    throw new Error("x402 signing requires tweetnacl: npm install tweetnacl");
-  }
-  const naclSign = tweetnacl.default?.sign ?? tweetnacl.sign;
-  const signed = naclSign.detached(messageBytes, keypair.secretKey);
-  payload.payload.signature = Buffer.from(signed).toString("base64");
-
-  return Buffer.from(JSON.stringify(payload)).toString("base64");
 }
 
 // ── Start ───────────────────────────────────────────────────────────────────
@@ -1228,6 +1353,14 @@ async function main() {
   console.error(
     `[mpp32] MCP server v${SERVER_VERSION} on stdio. API ${API_URL}. Configured: ${features}. Timeout ${TIMEOUT_MS}ms.`,
   );
+  // Per-variable status so a user staring at this log can immediately see
+  // whether their env vars made it through. Values are fingerprinted.
+  const fp = (v: string | undefined): string =>
+    !v ? "NOT SET" : v.length <= 12 ? `SET (${v.length}c)` : `SET (${v.slice(0, 6)}…${v.slice(-4)}, ${v.length}c)`;
+  console.error(`[mpp32]   MPP32_AGENT_KEY: ${fp(AGENT_KEY)}`);
+  console.error(`[mpp32]   MPP32_SOLANA_PRIVATE_KEY: ${fp(SOLANA_PRIVATE_KEY)}`);
+  console.error(`[mpp32]   MPP32_PRIVATE_KEY: ${fp(PRIVATE_KEY)}`);
+  console.error(`[mpp32] If a key shows NOT SET but you set it in claude_desktop_config.json, call the get_mpp32_diagnostics tool for help, or fully quit Claude Desktop and reopen.`);
 }
 
 main().catch((err) => {

@@ -1,6 +1,6 @@
 {
   "name": "mpp32-mcp-server",
-  "version": "1.1.2",
+  "version": "1.2.4",
   "mcpName": "io.github.MPP32/mpp32-mcp-server",
   "description": "Payment layer for AI agents. One MCP, five protocols, thousands of paid APIs your agent can call.",
   "type": "module",
@@ -69,17 +69,19 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
+    "@solana-program/compute-budget": "^0.15.0",
+    "@solana-program/token": "^0.13.0",
+    "@solana/kit": "^6.9.0",
+    "bs58": "^6.0.0",
+    "tweetnacl": "^1.0.3",
+    "viem": "^2.48.11",
     "zod": "^3.23.0"
   },
   "peerDependencies": {
-    "mppx": ">=0.4.0",
-    "viem": ">=2.0.0"
+    "mppx": ">=0.4.0"
   },
   "peerDependenciesMeta": {
     "mppx": {
-      "optional": true
-    },
-    "viem": {
       "optional": true
     }
   },

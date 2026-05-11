@@ -8,13 +8,13 @@
     "subfolder": "mcp-server"
   },
   "websiteUrl": "https://mpp32.org",
-  "version": "1.1.2",
+  "version": "1.2.2",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "mpp32-mcp-server",
-      "version": "1.1.2",
+      "version": "1.2.2",
       "transport": {
         "type": "stdio"
       },
@@ -28,14 +28,14 @@
         },
         {
           "name": "MPP32_SOLANA_PRIVATE_KEY",
-          "description": "Solana private key used to sign x402 USDC payments locally. Only needed when calling paid services that prefer x402. Stays on your machine, never sent to MPP32 servers.",
+          "description": "Solana private key (base58, hex, or [byte,byte,...] JSON array) used to sign x402 USDC payments on Solana-family networks. Required for services like the MPP32 Intelligence Oracle that settle on Solana mainnet. Stays on your machine, never sent to MPP32 servers.",
           "format": "string",
           "isRequired": false,
           "isSecret": true
         },
         {
           "name": "MPP32_PRIVATE_KEY",
-          "description": "Ethereum L2 private key used to sign Tempo pathUSD payments locally. Optional fallback for paid services when x402 is not available. Stays on your machine, never sent to MPP32 servers.",
+          "description": "EVM private key (64-character hex, optionally 0x-prefixed) used to sign x402 USDC payments on Base/Base-Sepolia/Ethereum via EIP-3009 transferWithAuthorization, and Tempo pathUSD payments. Required for ~85% of the federated catalog which lives on Base. Stays on your machine, never sent to MPP32 servers.",
           "format": "string",
           "isRequired": false,
           "isSecret": true
@@ -47,6 +47,14 @@
           "isRequired": false,
           "isSecret": false,
           "default": "https://mpp32.org"
+        },
+        {
+          "name": "MPP32_SOLANA_RPC_URL",
+          "description": "Override the Solana RPC endpoint used to fetch recent blockhashes when building x402 transactions. Defaults to https://api.mainnet-beta.solana.com. Set this if you hit public-endpoint rate limits.",
+          "format": "string",
+          "isRequired": false,
+          "isSecret": false,
+          "default": "https://api.mainnet-beta.solana.com"
         }
       ]
     }

@@ -9,7 +9,18 @@
   </p>
 </p>
 
-One install. Five payment rails. Thousands of paid APIs your agent can reach without you setting up a single account.
+One install. Pay any x402 endpoint on Solana from your agent. Browse a federated index of thousands of machine payable APIs without setting up a single provider account.
+
+## What works today
+
+| Rail | Status | Network | Asset |
+|:-----|:-------|:--------|:------|
+| x402 | Production | Solana (mainnet) | USDC |
+| x402 | Production | Base | USDC |
+| Tempo | Envelope wired, gated off in production until the client flow is verified end to end | Ethereum L2 | pathUSD |
+| ACP / AP2 / AGTP | Envelopes wired, gated off in production | Multi chain | per protocol |
+
+The MCP server ships signers for both Solana and Base out of the box. When a paid call returns a 402, the server picks the network that matches the key you configured and settles the payment in one round trip.
 
 ## Why this beats running your own integrations
 
@@ -25,22 +36,10 @@ MPP32 replaces all of that with one MCP server. Your agent asks for a service by
 * Track every call, every dollar settled, and every protocol used from a dashboard at mpp32.org.
 * Get an automatic 20 percent or 40 percent discount on native services for holding M32 once your wallet is verified.
 
-## Payment rails it speaks natively
-
-| Rail | Settles in | Network |
-|:-----|:-----------|:--------|
-| x402 | USDC | Solana |
-| Tempo | pathUSD | Ethereum L2 |
-| ACP | Checkout session | Multi chain |
-| AP2 | W3C verifiable credentials | Chain agnostic |
-| AGTP | HMAC signed agent certificates | Chain agnostic |
-
-Every native endpoint accepts all five. The server picks whichever your wallet is funded for and falls back gracefully if the first attempt fails.
-
 ## Install
 
 ```bash
-npx mpp32-mcp-server
+npx -y mpp32-mcp-server@latest
 ```
 
 ### Claude Desktop, Claude Code, Cursor, Windsurf
@@ -52,30 +51,56 @@ Drop this into the MCP servers section of your client config.
   "mcpServers": {
     "mpp32": {
       "command": "npx",
-      "args": ["mpp32-mcp-server"],
+      "args": ["-y", "mpp32-mcp-server@latest"],
       "env": {
         "MPP32_AGENT_KEY": "mpp32_agent_…",
-        "MPP32_SOLANA_PRIVATE_KEY": "your_solana_private_key_for_usdc"
+        "MPP32_SOLANA_PRIVATE_KEY": "<your base58 Solana secret key>"
       }
     }
   }
 }
 ```
 
-Get an `MPP32_AGENT_KEY` at [mpp32.org/agent-console](https://mpp32.org/agent-console). No signup, no email, just a session form. With an agent key every call is attributed to your dashboard so you can see spend, success rate, and protocol breakdown. Without it the server still works but you only see native services and the calls stay anonymous.
+Config file locations:
 
-`MPP32_SOLANA_PRIVATE_KEY` and `MPP32_PRIVATE_KEY` are only needed for paid services. Free services in the catalog work without any key.
+* **Claude Desktop (macOS):** `~/Library/Application Support/Claude/claude_desktop_config.json`
+* **Claude Desktop (Windows):** `%APPDATA%\Claude\claude_desktop_config.json`
+* **Cursor:** `~/.cursor/mcp.json`
+* **Windsurf:** `~/.codeium/windsurf/mcp_config.json`
+
+Fully quit and reopen the client after editing. The MCP child process inherits env vars from this file at launch.
+
+Get an `MPP32_AGENT_KEY` at [mpp32.org/agent-console](https://mpp32.org/agent-console). No signup, no email, just click **Create Agent Session** and the form returns a key plus this exact config snippet ready to copy. With an agent key every call is attributed to your dashboard so you can see spend, success rate, and protocol breakdown. Without it the server still works but you only see native services and the calls stay anonymous.
+
+`MPP32_SOLANA_PRIVATE_KEY` is only needed for paid services. Free services in the catalog work without any payment key.
+
+### What format does `MPP32_SOLANA_PRIVATE_KEY` take?
+
+A base58 encoded 64 byte Solana secret key. The same string that Phantom shows under **export private key** (not the seed phrase). If you have a `keypair.json` (the 64 byte array Solana CLI uses), convert it once with:
+
+```bash
+node -e "console.log(require('bs58').encode(Buffer.from(JSON.parse(require('fs').readFileSync('keypair.json')))))"
+```
+
+Then paste the resulting string into the env block. Treat it like a password. It can spend any USDC and SOL in the wallet.
+
+### Fund the wallet with both USDC and SOL
+
+x402 settles the payment in USDC, but Solana itself charges a tiny native SOL fee on every transaction. A USDC only wallet will fail with `insufficient funds for rent` even though the USDC balance is plentiful. About `0.001 SOL` covers many calls.
+
+Tip: call the `get_mpp32_diagnostics` tool from inside Claude. It probes the API, reports which env vars actually reached the MCP process, and prints `Ready to pay: YES` once everything is wired.
 
 ## Configuration
 
 | Variable | When you need it | What it does |
 |:---------|:-----------------|:-------------|
 | `MPP32_AGENT_KEY` | Recommended | Session key from mpp32.org/agent-console. Unlocks the full federated catalog and dashboard tracking. Also accepted as `MPP32_API_KEY`. |
-| `MPP32_SOLANA_PRIVATE_KEY` | Paid x402 calls | Solana key used to sign USDC payments locally. |
-| `MPP32_PRIVATE_KEY` | Paid Tempo calls | EVM key used to sign pathUSD payments locally on Ethereum L2. |
+| `MPP32_SOLANA_PRIVATE_KEY` | Paid x402 calls on Solana | Base58 encoded Solana secret key. Used to sign USDC payments locally. Never leaves your machine. |
+| `MPP32_PRIVATE_KEY` | Paid x402 calls on Base | 0x prefixed EVM private key. Used to sign USDC payments on Base when a provider only accepts EVM. |
+| `MPP32_PREFERRED_NETWORK` | Optional override | When both keys are configured and the challenge advertises multiple networks, force one. Accepts `solana`, `base`, `evm`, or a full CAIP-2 string. |
 | `MPP32_API_URL` | Custom deployments | Override the API base URL. Defaults to `https://mpp32.org`. |
 
-Private keys stay on your machine. They sign payments locally and never travel to MPP32 servers. Provide one or both for paid calls. If both are present, x402 is tried first and Tempo is used as a fallback.
+Private keys stay on your machine. They sign payments locally and never travel to MPP32 servers. Provide either or both for paid calls. If both are present and a challenge advertises both networks, EVM is preferred unless `MPP32_PREFERRED_NETWORK` is set; if only one key is configured, that network wins automatically.
 
 ## Tools your agent will see
 
@@ -111,15 +136,19 @@ Under the hood:
 
 No payment logic in your code. No per provider keys to juggle.
 
+### `get_mpp32_diagnostics`
+
+Reports the MCP server version, which env vars actually reached the child process, the API URL it will hit, and a live API reachability probe. Prints `Ready to pay: YES` only when an agent key plus at least one signing key are detected and the API is reachable. Call this first if anything misbehaves. Also available as `debug_mpp32`.
+
 ### `get_solana_token_intelligence`
 
-Real time analysis of any Solana token. Pulls live data from DexScreener, Jupiter, and CoinGecko and merges it into one report. Returns an alpha score from 0 to 100, rug risk, whale activity, smart money signals, 24 hour pump probability, projected ROI ranges, and full market data. Costs $0.008 per call, paid automatically through x402 or Tempo when a key is set.
+Real time analysis of any Solana token. Pulls live data from DexScreener, Jupiter, and CoinGecko and merges it into one report. Returns an alpha score from 0 to 100, rug risk, whale activity, smart money signals, 24 hour pump probability, projected ROI ranges, and full market data. Costs $0.008 per call, paid automatically through x402 when a Solana key is set.
 
 ```json
 { "token": "BONK" }
 ```
 
-M32 holders get tiered discounts (20 percent at 250k, 40 percent at 1M) the moment their wallet is verified at the agent console.
+M32 holders will get tiered discounts (20 percent at 250k, 40 percent at 1M) once SIWS wallet signature verification ships. The discount path is gated off in production until then so it cannot be claimed by spoofing a wallet header.
 
 ## How discovery works
 
@@ -147,13 +176,13 @@ Sessions are scoped, revocable, and rotate cleanly. The key is hashed at rest on
 
 ## How payment verification actually works
 
-x402 payments are verified on chain through the Solana facilitator. Tempo payments are verified cryptographically through the mppx SDK. ACP sessions are database backed with a real checkout flow. AP2 mandates use ECDSA P-256 signature verification. AGTP uses HMAC SHA256 signed agent certificates with a server held salt so signatures cannot be forged from a public agent id alone.
+x402 payments are verified on chain through the Solana facilitator (for SVM) or the Base facilitator (for EVM). MPP32 never holds custody of funds. Every paid call settles directly from the caller's wallet to the provider's wallet.
 
-Every protocol has its own verification path. None of them are stubbed. MPP32 never holds custody of funds. Every paid call settles directly from the caller's wallet to the provider's wallet.
+Tempo, ACP, AP2, and AGTP envelopes are implemented in the proxy and tested against synthetic challenges, but the corresponding client signing flows are not yet exposed by this MCP. Those rails stay disabled in production until each has a verified end to end client flow. Treat the catalog as an x402 catalog today; the rest will light up as their clients land.
 
 ## For API providers
 
-List your endpoint once and get paid through every protocol automatically. MPP32 handles the payment negotiation, the on chain verification, the discovery listings via OpenAPI and A2A and MCP standards, the 24 hour health re check, and the analytics dashboard. Settlement lands in USDC or pathUSD straight to your wallet.
+List your endpoint once and receive payment over x402. MPP32 handles the payment negotiation, the on chain verification, the discovery listings via OpenAPI and A2A and MCP standards, the periodic health re check, and the analytics dashboard. Settlement lands in USDC on Solana or Base straight to your wallet.
 
 Register at [mpp32.org/build](https://mpp32.org/build).
 
