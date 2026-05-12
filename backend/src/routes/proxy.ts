@@ -4,10 +4,12 @@ import { createHash } from 'crypto'
 import { env } from '../env.js'
 import { mppx as _mppxRef, logger, rateLimit } from '../lib/mpp.js'
 import { prisma } from '../lib/db.js'
-import { isX402Enabled, isX402Request, getX402PaymentHeader, createX402Challenge, verifyX402Payment } from '../lib/x402.js'
+import { isX402Enabled, isX402Request, getX402PaymentHeader, createX402Challenge, verifyX402Envelope, settleX402Payment, type PaymentRequirements } from '../lib/x402.js'
+import { handleEscrowSettlement, buildEscrowHeaders, type EscrowSettlementOutcome } from '../lib/escrow.js'
 import { isAP2Enabled, isAP2Request, getAP2MandateHeader, verifyAP2Mandate, createAP2Challenge } from '../lib/ap2.js'
 import { isACPEnabled, isACPRequest, getACPSessionHeader, createACPChallenge, verifyACPSession } from '../lib/acp.js'
 import { isAGTPEnabled, isAGTPRequest, getAGTPHeaders, getAGTPIntentMethod, createAGTPChallenge, verifyAGTPAgent } from '../lib/agtp.js'
+import { checkUrlForSsrf } from '../lib/ssrf.js'
 
 const MAX_BODY_BYTES = 1_048_576 // 1 MB
 
@@ -177,6 +179,24 @@ proxyRouter.all(
       )
     }
 
+    // SSRF guard: a malicious or compromised submission could point at
+    // 169.254.169.254 (cloud metadata), localhost, or RFC1918 space. Re-check
+    // on every request — admins approve URLs once, but DNS can drift, and
+    // we cannot trust `isVerified` to cover this.
+    const ssrf = checkUrlForSsrf(submission.endpointUrl)
+    if (!ssrf.ok) {
+      logger.warn('Proxy SSRF guard rejected endpointUrl', {
+        requestId,
+        slug,
+        endpointUrl: submission.endpointUrl,
+        reason: ssrf.reason,
+      })
+      return c.json(
+        { error: { message: `Endpoint URL is not allowed: ${ssrf.reason}`, code: 'ENDPOINT_BLOCKED' } },
+        422
+      )
+    }
+
     if (!submission.paymentAddress) {
       return c.json(
         { error: { message: 'This service has no payment address configured', code: 'NO_PAYMENT_ADDRESS' } },
@@ -282,18 +302,21 @@ proxyRouter.all(
       )
     }
 
-    // x402 payment path — verify directly without Tempo middleware
+    // Escrow-402: verify the x402 envelope but DO NOT settle yet.
+    // Settlement is deferred until after the upstream response passes quality checks.
+    let escrowHold: { envelope: unknown; requirements: PaymentRequirements; payer?: string } | null = null
     if (hasX402Auth && x402Active) {
       const paymentHeader = getX402PaymentHeader(c)!
       const resource = new URL(c.req.url).pathname
-      const result = await verifyX402Payment(paymentHeader, String(price), x402Recipient, resource)
+      const result = await verifyX402Envelope(paymentHeader, String(price), x402Recipient, resource)
       if (!result.verified) {
-        logApiRequest(requestId, slug, c.req.method, 402, Date.now() - startTime, false, 'X402_PAYMENT_FAILED', ipHashed, ap2MandateType, ap2MandateVerified, ap2AgentId, acpSessionId, acpVerified, agtpIntentMethod, agtpAgentCertId, agtpVerified, null)
+        logApiRequest(requestId, slug, c.req.method, 402, Date.now() - startTime, false, 'X402_PAYMENT_FAILED', ipHashed, ap2MandateType, ap2MandateVerified, ap2AgentId, acpSessionId, acpVerified, agtpIntentMethod, agtpAgentCertId, agtpVerified, null, null, null)
         return c.json(
           { error: { message: result.error ?? 'x402 payment verification failed', code: 'PAYMENT_FAILED' } },
           402,
         )
       }
+      escrowHold = { envelope: result.envelope!, requirements: result.requirements!, payer: result.payer }
       protocolUsed = 'x402'
     }
 
@@ -372,6 +395,7 @@ proxyRouter.all(
 
     let proxyResult: Response | null = null
     let paymentVerified = hasX402Auth || acpVerified
+    let upstreamMeta: { status: number; bodyLength: number } | null = null
 
     async function doProxy() {
       paymentVerified = true
@@ -469,6 +493,7 @@ proxyRouter.all(
 
       const contentType = upstream.headers.get('Content-Type') ?? 'application/json'
       const responseBody = await upstream.text()
+      upstreamMeta = { status: upstream.status, bodyLength: responseBody.length }
 
       // Cache for idempotency (only cache non-5xx responses)
       if (idempotencyKey && upstream.status < 500) {
@@ -480,7 +505,9 @@ proxyRouter.all(
         })
       }
 
-      logApiRequest(requestId, slug, c.req.method, upstream.status, Date.now() - startTime, paymentVerified, null, ipHashed, ap2MandateType, ap2MandateVerified, ap2AgentId, acpSessionId, acpVerified, agtpIntentMethod, agtpAgentCertId, agtpVerified, protocolUsed)
+      if (!escrowHold) {
+        logApiRequest(requestId, slug, c.req.method, upstream.status, Date.now() - startTime, paymentVerified, null, ipHashed, ap2MandateType, ap2MandateVerified, ap2AgentId, acpSessionId, acpVerified, agtpIntentMethod, agtpAgentCertId, agtpVerified, protocolUsed)
+      }
 
       proxyResult = new Response(responseBody, {
         status: upstream.status,
@@ -495,8 +522,33 @@ proxyRouter.all(
     // x402 or ACP path: already verified above, go straight to proxy
     if (hasX402Auth || acpVerified) {
       await doProxy()
-      if (proxyResult) return proxyResult
-      logApiRequest(requestId, slug, c.req.method, 500, Date.now() - startTime, paymentVerified, 'PROXY_ERROR', ipHashed, ap2MandateType, ap2MandateVerified, ap2AgentId, acpSessionId, acpVerified, agtpIntentMethod, agtpAgentCertId, agtpVerified, protocolUsed)
+
+      // Escrow-402: conditionally settle x402 payment based on upstream quality.
+      // TS cannot track proxyResult/upstreamMeta across the doProxy() closure, so
+      // we cast explicitly — doProxy() always sets these on a non-error path.
+      let escrowOutcome: EscrowSettlementOutcome | null = null
+      const currentProxy = proxyResult as Response | null
+      if (escrowHold && currentProxy) {
+        const hold = escrowHold
+        const meta = upstreamMeta as { status: number; bodyLength: number } | null
+        escrowOutcome = await handleEscrowSettlement(
+          meta?.status ?? 0,
+          meta?.bodyLength ?? 0,
+          () => settleX402Payment(hold.envelope, hold.requirements),
+        )
+        paymentVerified = escrowOutcome.escrowStatus === 'settled'
+
+        const escrowHeaders = buildEscrowHeaders(escrowOutcome)
+        const newHeaders = new Headers(currentProxy.headers)
+        for (const [k, v] of Object.entries(escrowHeaders)) newHeaders.set(k, v)
+        proxyResult = new Response(currentProxy.clone().body, { status: currentProxy.status, headers: newHeaders })
+      }
+
+      if (proxyResult) {
+        logApiRequest(requestId, slug, c.req.method, proxyResult.status, Date.now() - startTime, paymentVerified, null, ipHashed, ap2MandateType, ap2MandateVerified, ap2AgentId, acpSessionId, acpVerified, agtpIntentMethod, agtpAgentCertId, agtpVerified, protocolUsed, escrowOutcome?.escrowStatus ?? null, escrowOutcome?.skipReason ?? null)
+        return proxyResult
+      }
+      logApiRequest(requestId, slug, c.req.method, 500, Date.now() - startTime, paymentVerified, 'PROXY_ERROR', ipHashed, ap2MandateType, ap2MandateVerified, ap2AgentId, acpSessionId, acpVerified, agtpIntentMethod, agtpAgentCertId, agtpVerified, protocolUsed, null, null)
       return c.json({ error: { message: 'Proxy error', code: 'PROXY_ERROR' } }, 500)
     }
 
@@ -533,6 +585,8 @@ function logApiRequest(
   agtpAgentCertId?: string | null,
   agtpVerified?: boolean,
   protocolUsed?: string | null,
+  escrowStatus?: string | null,
+  escrowSkipReason?: string | null,
 ) {
   prisma.apiRequest
     .create({
@@ -547,6 +601,8 @@ function logApiRequest(
         agtpAgentCertId: agtpAgentCertId ?? null,
         agtpVerified: agtpVerified ?? false,
         protocolUsed: protocolUsed ?? null,
+        escrowStatus: escrowStatus ?? null,
+        escrowSkipReason: escrowSkipReason ?? null,
       },
     })
     .catch((e) => logger.error('Failed to log API request', { requestId, error: String(e) }))

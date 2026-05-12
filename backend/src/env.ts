@@ -20,10 +20,16 @@ const envSchema = z.object({
   X402_ENABLED: z.enum(["true", "false"]).optional().default("true"),
   SOLANA_RPC_URL: z.string().url().optional().default("https://api.mainnet-beta.solana.com"),
   M32_TOKEN_MINT: z.string().optional().default("6hKtz8FV7cAQMrbjcBZeTQAcrYep3WCM83164JpJpump"),
-  AP2_ENABLED: z.enum(["true", "false"]).optional().default("true"),
+  // Defaults reflect the public-launch profile: native + x402-Solana only.
+  // Tempo / AP2 / ACP / AGTP are off by default so the 402 envelope is clean.
+  // Flip individually in .env once each protocol has a tested client flow.
+  TEMPO_ENABLED: z.enum(["true", "false"]).optional().default("false"),
+  AP2_ENABLED: z.enum(["true", "false"]).optional().default("false"),
   AP2_REQUIRE_MANDATE: z.enum(["true", "false"]).optional().default("false"),
-  ACP_ENABLED: z.enum(["true", "false"]).optional().default("true"),
-  AGTP_ENABLED: z.enum(["true", "false"]).optional().default("true"),
+  ACP_ENABLED: z.enum(["true", "false"]).optional().default("false"),
+  AGTP_ENABLED: z.enum(["true", "false"]).optional().default("false"),
+  // Gates the spoofable x-wallet-address M32 discount path until SIWS lands.
+  M32_DISCOUNT_ENABLED: z.enum(["true", "false"]).optional().default("false"),
   CONTACT_NOTIFY_EMAIL: z.string().email().optional(),
 });
 

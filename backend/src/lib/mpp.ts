@@ -7,8 +7,10 @@ import {
   isX402Request,
   getX402PaymentHeader,
   createX402Challenge,
-  verifyX402Payment,
+  verifyX402Envelope,
+  settleX402Payment,
 } from './x402.js'
+import { handleEscrowSettlement, buildEscrowHeaders } from './escrow.js'
 import {
   isAP2Enabled,
   isAP2Request,
@@ -57,8 +59,17 @@ export const mppx = Mppx.create({
 
 // ---- Universal Protocol Charge Middleware (Tempo + x402 + AP2 + ACP + AGTP) ----
 
+// Tempo emits its own WWW-Authenticate header via mppx middleware. When
+// TEMPO_ENABLED=false we must (a) suppress that header on outgoing 402s and
+// (b) avoid invoking the Tempo charge middleware at all — otherwise it leaks
+// a Tempo branch into a payments envelope that should only advertise x402.
+export function isTempoEnabled(): boolean {
+  return env.TEMPO_ENABLED === 'true'
+}
+
 function buildPaymentMethodsList(): string {
-  const methods = ['tempo']
+  const methods: string[] = []
+  if (isTempoEnabled()) methods.push('tempo')
   if (isX402Enabled()) methods.push('x402')
   if (isACPEnabled()) methods.push('acp')
   if (isAP2Enabled()) methods.push('ap2')
@@ -66,11 +77,19 @@ function buildPaymentMethodsList(): string {
   return methods.join(', ')
 }
 
+// Strip any Tempo-flavored headers that mppx might have set on a 402.
+function stripTempoHeaders(headers: Headers) {
+  headers.delete('WWW-Authenticate')
+  headers.delete('Www-Authenticate')
+}
+
 function addProtocolChallenges(headers: Headers, resource: string, amount: string) {
   const x402Active = isX402Enabled()
   const ap2Active = isAP2Enabled()
   const acpActive = isACPEnabled()
   const agtpActive = isAGTPEnabled()
+
+  if (!isTempoEnabled()) stripTempoHeaders(headers)
 
   headers.set('X-Payment-Methods', buildPaymentMethodsList())
 
@@ -89,6 +108,23 @@ function addProtocolChallenges(headers: Headers, resource: string, amount: strin
     headers.set('X-AGTP-Requirements', createAGTPChallenge(resource))
     headers.set('X-AGTP-Supported', 'true')
   }
+}
+
+// Build a stand-alone x402-only 402 response without invoking Tempo middleware.
+// Used whenever TEMPO_ENABLED=false so nothing Tempo-shaped ends up on the wire.
+function buildCleanPaymentRequired(resource: string, amount: string): Response {
+  const headers = new Headers({
+    'Content-Type': 'application/problem+json',
+    'Cache-Control': 'no-store',
+  })
+  addProtocolChallenges(headers, resource, amount)
+  const body = JSON.stringify({
+    type: 'https://x402.org/problems/payment-required',
+    title: 'Payment Required',
+    status: 402,
+    detail: 'Payment is required. Sign the Payment-Required challenge and retry with the X-Payment header.',
+  })
+  return new Response(body, { status: 402, headers })
 }
 
 async function verifyAuthorizationLayers(c: any, amount: string) {
@@ -142,20 +178,24 @@ async function verifyAuthorizationLayers(c: any, amount: string) {
 }
 
 export function universalProtocolCharge(amount: string, recipientOverride?: string) {
-  const tempoCharge = mppx.charge({ amount })
   const x402Recipient = recipientOverride ?? env.X402_RECIPIENT_ADDRESS ?? ''
   const x402Active = isX402Enabled()
   const acpActive = isACPEnabled()
+  const tempoActive = isTempoEnabled()
+  // Tempo charge middleware is only created when we actually plan to use it.
+  // Constructing it unconditionally previously caused Tempo's WWW-Authenticate
+  // header to leak into Solana-only 402 envelopes.
+  const tempoCharge = tempoActive ? mppx.charge({ amount }) : null
 
   return createMiddleware(async (c, next) => {
-    // Authorization layers (AP2 + AGTP)
+    // Authorization layers (AP2 + AGTP) — only run when those protocols are on.
     const authError = await verifyAuthorizationLayers(c, amount)
     if (authError) return authError
 
     const resource = new URL(c.req.url).pathname
 
     // Payment layer: ACP
-    if (isACPRequest(c) && acpActive) {
+    if (acpActive && isACPRequest(c)) {
       const sessionHeader = getACPSessionHeader(c)!
       const acpResult = await verifyACPSession(sessionHeader, resource, amount)
       if (!acpResult.verified) {
@@ -171,61 +211,83 @@ export function universalProtocolCharge(amount: string, recipientOverride?: stri
       return
     }
 
-    // Payment layer: x402
-    if (isX402Request(c) && x402Active) {
+    // Escrow-402: verify the x402 envelope first, run the handler, then settle
+    // only if the handler returned a successful response.
+    if (x402Active && isX402Request(c)) {
       const paymentHeader = getX402PaymentHeader(c)!
-      const result = await verifyX402Payment(paymentHeader, amount, x402Recipient, resource)
-      if (!result.verified) {
+      const envelopeResult = await verifyX402Envelope(paymentHeader, amount, x402Recipient, resource)
+      if (!envelopeResult.verified) {
         return c.json(
-          { error: { message: result.error ?? 'Payment verification failed', code: 'PAYMENT_FAILED' } },
+          { error: { message: envelopeResult.error ?? 'Payment verification failed', code: 'PAYMENT_FAILED' } },
           402,
         )
       }
+
       c.set('paymentMethod' as never, 'x402' as never)
-      c.set('settlementTxSignature' as never, (result.txSignature ?? '') as never)
-      if (result.txSignature) {
-        c.header('X-Payment-Response', Buffer.from(JSON.stringify({
+      await next()
+
+      const resStatus = c.res?.status ?? 500
+      const escrowOutcome = await handleEscrowSettlement(
+        resStatus,
+        0,
+        () => settleX402Payment(envelopeResult.envelope!, envelopeResult.requirements!),
+      )
+
+      const escrowHeaders = buildEscrowHeaders(escrowOutcome)
+      for (const [k, v] of Object.entries(escrowHeaders)) {
+        c.res.headers.set(k, v)
+      }
+      if (escrowOutcome.escrowStatus === 'settled' && escrowOutcome.txSignature) {
+        c.set('settlementTxSignature' as never, (escrowOutcome.txSignature ?? '') as never)
+        c.res.headers.set('X-Payment-Response', Buffer.from(JSON.stringify({
           method: 'x402',
-          txSignature: result.txSignature,
-          payer: result.payer,
-          network: result.network,
+          txSignature: escrowOutcome.txSignature,
+          payer: envelopeResult.payer,
+          network: escrowOutcome.network,
           amount,
         })).toString('base64'))
-        c.header('X-Settlement-Tx', result.txSignature)
-        c.header('X-Settlement-Method', 'x402')
       }
-      await next()
       return
     }
 
-    // Payment layer: Tempo
+    // Payment layer: Tempo (only when explicitly enabled)
     const hasTempoAuth = !!c.req.header('authorization')?.startsWith('Payment ')
-    if (hasTempoAuth) {
+    if (tempoActive && tempoCharge && hasTempoAuth) {
       c.set('paymentMethod' as never, 'tempo' as never)
       c.header('X-Settlement-Method', 'tempo')
       return tempoCharge(c, next)
     }
 
-    // No payment — return 402 with all protocol challenges
-    const tempoResponse = await tempoCharge(c, async () => {})
-    if (tempoResponse instanceof Response && tempoResponse.status === 402) {
-      const headers = new Headers(tempoResponse.headers)
-      addProtocolChallenges(headers, resource, amount)
-      return new Response(tempoResponse.body, { status: 402, headers })
+    // No payment — return 402 with only the enabled protocols' challenges.
+    if (tempoActive && tempoCharge) {
+      const tempoResponse = await tempoCharge(c, async () => {})
+      if (tempoResponse instanceof Response && tempoResponse.status === 402) {
+        const headers = new Headers(tempoResponse.headers)
+        addProtocolChallenges(headers, resource, amount)
+        return new Response(tempoResponse.body, { status: 402, headers })
+      }
+      return tempoResponse
     }
-    return tempoResponse
+    return buildCleanPaymentRequired(resource, amount)
   })
 }
 
 export const dualProtocolCharge = universalProtocolCharge
 
+// SECURITY: This used to read `x-wallet-address` from the request and apply a
+// 20–40% discount based on M32 balance — but that header is spoofable, so
+// anyone could claim the discount by sending someone else's wallet. The
+// discount is gated behind M32_DISCOUNT_ENABLED until SIWS wallet-signature
+// verification ships and we can require proof of ownership.
 export function universalProtocolChargeWithDiscount(baseAmount: string) {
   return createMiddleware(async (c, next) => {
     const wallet = c.req.header('x-wallet-address')
     let effectiveAmount = baseAmount
     let discountPercent = 0
 
-    if (wallet) {
+    if (wallet && env.M32_DISCOUNT_ENABLED === 'true') {
+      // ⚠ This path will only be reachable once SIWS is wired up. Until then,
+      // the env gate keeps it off.
       const balance = await getM32Balance(wallet)
       const result = calculateDiscount(balance, baseAmount)
       effectiveAmount = result.discountedPrice
@@ -251,19 +313,18 @@ export function universalProtocolChargeForProxy(
   amount: string,
   x402Recipient: string,
 ) {
-  const tempoCharge = (mppInstance as any).charge({ amount })
   const x402Active = isX402Enabled()
   const acpActive = isACPEnabled()
+  const tempoActive = isTempoEnabled()
+  const tempoCharge = tempoActive ? (mppInstance as any).charge({ amount }) : null
 
   return createMiddleware(async (c, next) => {
-    // Authorization layers (AP2 + AGTP)
     const authError = await verifyAuthorizationLayers(c, amount)
     if (authError) return authError
 
     const resource = new URL(c.req.url).pathname
 
-    // Payment layer: ACP
-    if (isACPRequest(c) && acpActive) {
+    if (acpActive && isACPRequest(c)) {
       const sessionHeader = getACPSessionHeader(c)!
       const acpResult = await verifyACPSession(sessionHeader, resource, amount)
       if (!acpResult.verified) {
@@ -279,36 +340,47 @@ export function universalProtocolChargeForProxy(
       return
     }
 
-    // Payment layer: x402
-    if (isX402Request(c) && x402Active) {
+    if (x402Active && isX402Request(c)) {
       const paymentHeader = getX402PaymentHeader(c)!
-      const result = await verifyX402Payment(paymentHeader, amount, x402Recipient, resource)
-      if (!result.verified) {
+      const envelopeResult = await verifyX402Envelope(paymentHeader, amount, x402Recipient, resource)
+      if (!envelopeResult.verified) {
         return c.json(
-          { error: { message: result.error ?? 'Payment verification failed', code: 'PAYMENT_FAILED' } },
+          { error: { message: envelopeResult.error ?? 'Payment verification failed', code: 'PAYMENT_FAILED' } },
           402,
         )
       }
       c.set('paymentMethod' as never, 'x402' as never)
       await next()
+
+      const resStatus = c.res?.status ?? 500
+      const escrowOutcome = await handleEscrowSettlement(
+        resStatus,
+        0,
+        () => settleX402Payment(envelopeResult.envelope!, envelopeResult.requirements!),
+      )
+      const escrowHeaders = buildEscrowHeaders(escrowOutcome)
+      for (const [k, v] of Object.entries(escrowHeaders)) {
+        c.res.headers.set(k, v)
+      }
       return
     }
 
-    // Payment layer: Tempo
     const hasTempoAuth = !!c.req.header('authorization')?.startsWith('Payment ')
-    if (hasTempoAuth) {
+    if (tempoActive && tempoCharge && hasTempoAuth) {
       c.set('paymentMethod' as never, 'tempo' as never)
       return tempoCharge(c, next)
     }
 
-    // No payment — return 402 with all protocol challenges
-    const tempoResponse = await tempoCharge(c, async () => {})
-    if (tempoResponse instanceof Response && tempoResponse.status === 402) {
-      const headers = new Headers(tempoResponse.headers)
-      addProtocolChallenges(headers, resource, amount)
-      return new Response(tempoResponse.body, { status: 402, headers })
+    if (tempoActive && tempoCharge) {
+      const tempoResponse = await tempoCharge(c, async () => {})
+      if (tempoResponse instanceof Response && tempoResponse.status === 402) {
+        const headers = new Headers(tempoResponse.headers)
+        addProtocolChallenges(headers, resource, amount)
+        return new Response(tempoResponse.body, { status: 402, headers })
+      }
+      return tempoResponse
     }
-    return tempoResponse
+    return buildCleanPaymentRequired(resource, amount)
   })
 }
 

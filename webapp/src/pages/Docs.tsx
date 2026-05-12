@@ -6,29 +6,22 @@ const tabs = ["cURL", "JavaScript", "Python"] as const;
 type Tab = (typeof tabs)[number];
 
 const curlExample = `# Step 1: Make the initial request — you'll get 402
-curl -X POST https://mpp32.org/api/intelligence \\
+curl -i -X POST https://mpp32.org/api/intelligence \\
   -H "Content-Type: application/json" \\
   -d '{"token":"DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"}'
 # <- HTTP 402 Payment Required
-# Tempo: WWW-Authenticate: Payment amount=0.008 currency=pathUSD ...
-# x402:  X-Payment header with USDC on Solana
+# x402: Payment-Required envelope advertises USDC on Solana (and Base)
 
-# Step 2: Pay using mppx CLI and retry automatically
-npx mppx https://mpp32.org/api/intelligence \\
-  --method POST \\
-  --body '{"token":"DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"}' \\
-  --private-key $PRIVATE_KEY
+# Step 2: Easiest path — call through the MPP32 MCP server from your agent
+#   npx -y mpp32-mcp-server@latest
+# The MCP signs the x402 challenge locally using MPP32_SOLANA_PRIVATE_KEY
+# (or MPP32_PRIVATE_KEY for Base) and retries with the payment receipt.
 # <- HTTP 200 OK — intelligence payload returned`;
 
-const jsExample = `import { Mppx, tempo } from 'mppx/client'
-import { privateKeyToAccount } from 'viem/accounts'
+const jsExample = `// Easiest path: let the MPP32 MCP server handle x402 from your agent.
+// For a hand-rolled client, sign the x402 challenge with @solana/web3.js and
+// retry with the base64 X-Payment header. The server verifies on-chain.
 
-// Configure MPP payment client once at startup
-Mppx.create({
-  methods: [tempo({ account: privateKeyToAccount(process.env.PRIVATE_KEY) })]
-})
-
-// Make the request — mppx intercepts the 402 and pays automatically
 const res = await fetch('https://mpp32.org/api/intelligence', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
@@ -120,9 +113,9 @@ export default function Docs() {
           <div className="space-y-3 mb-6">
             {[
               { step: "1", label: "Try the Playground for free", desc: "The /api/intelligence/demo endpoint is unmetered. Go to the Playground, enter any Solana token address or ticker (e.g. BONK, JUP, WIF), and run a live query. No wallet or setup required." },
-              { step: "2", label: "Callers install the mppx SDK. Providers install nothing.", desc: "If you are CALLING a paid API (e.g. as an agent or client), install the mppx package (npm install mppx or pip install pympp) to handle the MPP payment flow automatically. If you are PROVIDING an API, you install nothing at all. Just expose a normal HTTP endpoint and the MPP32 proxy verifies payments server-side before forwarding requests to you." },
-              { step: "3", label: "Fund a wallet", desc: "MPP32 accepts payments across all 5 supported protocols: Tempo, x402, ACP, AP2, and AGTP. Fund an EVM wallet with pathUSD for Tempo, a Solana wallet with USDC for x402, or configure credentials for ACP, AP2, and AGTP. See the Supported Protocols table below for details." },
-              { step: "4", label: "Configure mppx and start querying", desc: "Initialize mppx with your wallet's private key. From that point on, every POST to /api/intelligence automatically handles the 402 payment and returns intelligence data." },
+              { step: "2", label: "Callers install the MPP32 MCP server. Providers install nothing.", desc: "If you are CALLING a paid API as an agent, drop the MPP32 MCP server into your MCP client (Claude Desktop, Claude Code, Cursor, Windsurf, Continue, Cline) and the x402 payment flow happens locally on your machine. If you are PROVIDING an API, you install nothing at all. Just expose a normal HTTP endpoint and the MPP32 proxy verifies payments server-side before forwarding requests to you." },
+              { step: "3", label: "Fund a wallet with USDC plus a little SOL", desc: "Paid services settle in USDC. x402 on Solana and x402 on Base are live in production today. Fund a Solana wallet with USDC and roughly 0.001 SOL for network fees, or a Base wallet with USDC. Tempo, ACP, AP2, and AGTP envelopes are wired into the proxy but stay disabled in production until each protocol's client signer ships." },
+              { step: "4", label: "Configure the MCP server and start querying", desc: "Drop the MCP config block into your client, paste in MPP32_AGENT_KEY from /agent-console, and add MPP32_SOLANA_PRIVATE_KEY (base58 Solana secret key) or MPP32_PRIVATE_KEY (0x-prefixed EVM key for Base). From that point on, every call to a paid service is signed automatically and the intelligence payload is returned." },
             ].map((s) => (
               <div key={s.step} className="card-surface rounded p-4 flex items-start gap-4">
                 <span className="font-mono text-mpp-amber text-xs mt-0.5 flex-shrink-0">0{s.step}</span>
@@ -139,16 +132,16 @@ export default function Docs() {
         <section id="authentication">
           <h2 className="font-display text-2xl font-semibold text-foreground mb-4">Authentication &amp; Payments</h2>
           <p className="text-muted-foreground text-sm leading-relaxed mb-4">
-            MPP32 uses the <strong className="text-foreground">Machine Payments Protocol (MPP)</strong> for authentication. There are no API keys. Instead, you authenticate by proving you have paid for, or are authorized to make, the specific request. MPP32 supports all 5 protocols. Callers can pay or authenticate with whichever one they prefer.
+            MPP32 uses the <strong className="text-foreground">Machine Payments Protocol (MPP)</strong> for authentication. There are no shared API keys against a paid service. Instead, you authenticate by proving you paid for the specific request. The proxy ships every protocol envelope below; only x402 has a verified end-to-end client flow in production today, on both Solana (USDC) and Base (USDC).
           </p>
           <p className="text-muted-foreground text-sm leading-relaxed mb-6">
             The flow works in three steps:
           </p>
           <div className="space-y-3 mb-6">
             {[
-              { step: "1", label: "Initial request", desc: "POST to /api/intelligence without any credential. The server returns HTTP 402 with a WWW-Authenticate header containing the payment challenge." },
-              { step: "2", label: "Pay", desc: "Your MPP client (mppx SDK or pympp) reads the challenge and pays automatically using whichever protocol is available. The SDK selects the correct protocol, constructs the payment or credential, and attaches proof to the retry request." },
-              { step: "3", label: "Authenticated request", desc: "Re-submit the original request with the Authorization: Payment token=... header. The server verifies the receipt on-chain and returns the intelligence payload." },
+              { step: "1", label: "Initial request", desc: "POST to /api/intelligence without any payment header. The server returns HTTP 402 with the x402 Payment-Required envelope and an X-Payment-Methods advertisement." },
+              { step: "2", label: "Pay", desc: "Your client reads the x402 challenge and signs a USDC transfer locally with your Solana or Base wallet. The MPP32 MCP server does this automatically; a hand-rolled client builds the base64 X-Payment header and retries." },
+              { step: "3", label: "Authenticated request", desc: "Re-submit the original request with the X-Payment header. The Solana or Base x402 facilitator verifies the on-chain settlement and returns the intelligence payload." },
             ].map((s) => (
               <div key={s.step} className="card-surface rounded p-4 flex items-start gap-4">
                 <span className="font-mono text-mpp-amber text-xs mt-0.5 flex-shrink-0">0{s.step}</span>
@@ -160,50 +153,46 @@ export default function Docs() {
             ))}
           </div>
           <div className="card-surface rounded p-4 mb-4">
-            <p className="font-mono text-[10px] text-muted-foreground uppercase tracking-wider mb-2">Tempo flow</p>
-            <pre className="font-mono text-xs text-foreground leading-relaxed whitespace-pre-wrap">{`← 402 WWW-Authenticate: Payment amount=0.008 currency=pathUSD recipient=<wallet> nonce=<nonce> expires=<ts>
-→ Authorization: Payment token=<signed-receipt-jwt>
-← 200 Payment-Receipt: verified`}</pre>
-          </div>
-          <div className="card-surface rounded p-4 mb-4">
-            <p className="font-mono text-[10px] text-muted-foreground uppercase tracking-wider mb-2">x402 flow (alternative)</p>
-            <pre className="font-mono text-xs text-foreground leading-relaxed whitespace-pre-wrap">{`← 402 X-Payment: {"scheme":"exact","network":"solana","maxAmountRequired":"8000","resource":"...","description":"..."}
+            <p className="font-mono text-[10px] text-muted-foreground uppercase tracking-wider mb-2">x402 flow (production)</p>
+            <pre className="font-mono text-xs text-foreground leading-relaxed whitespace-pre-wrap">{`← 402 Payment-Required: {"x402Version":1,"accepts":[{"scheme":"exact","network":"solana","maxAmountRequired":"8000","resource":"...","payTo":"<wallet>","asset":"USDC"}]}
+   X-Payment-Methods: x402
 → X-Payment: <base64-encoded-payment-proof>
-← 200 Payment verified`}</pre>
+← 200 OK + X-Payment-Response: {"settlementTxSignature":"...","network":"solana"}`}</pre>
           </div>
           <div className="card-surface border-l-2 border-mpp-amber/60 rounded p-4 bg-mpp-amber/5">
             <p className="text-xs text-muted-foreground leading-relaxed">
               <span className="text-mpp-amber font-mono uppercase tracking-wider">Note:</span>{" "}
-              All payment and authorization flows are handled automatically by the mppx and pympp SDKs. You do not need to implement any protocol manually.
+              The MPP32 MCP server handles every step of the x402 flow automatically. The Tempo, ACP, AP2, and AGTP envelopes ship in the proxy and are exercised in tests, but stay disabled in production until each protocol's client signer is verified end-to-end.
             </p>
           </div>
 
           {/* Supported Protocols */}
           <h3 className="text-foreground font-semibold text-sm mt-8 mb-3">Supported Protocols</h3>
           <p className="text-muted-foreground text-sm mb-4">
-            MPP32 acts as a universal proxy across 5 protocols. Callers use whichever protocol fits their stack. The provider receives a plain HTTP request after MPP32 verifies the credential.
+            The MPP32 proxy ships every protocol envelope below. Only x402 has a tested end-to-end client flow in production today; the others are gated off until each protocol's client signer is verified.
           </p>
           <div className="card-surface rounded overflow-hidden">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-mpp-border">
                   <th className="text-left px-5 py-3 font-mono text-[10px] text-muted-foreground uppercase tracking-wider">Protocol</th>
-                  <th className="text-left px-5 py-3 font-mono text-[10px] text-muted-foreground uppercase tracking-wider">Type</th>
+                  <th className="text-left px-5 py-3 font-mono text-[10px] text-muted-foreground uppercase tracking-wider">Status</th>
                   <th className="text-left px-5 py-3 font-mono text-[10px] text-muted-foreground uppercase tracking-wider">Settlement / Mechanism</th>
                   <th className="text-left px-5 py-3 font-mono text-[10px] text-muted-foreground uppercase tracking-wider">Header</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-mpp-border">
                 {[
-                  { protocol: "Tempo", type: "Payment", mechanism: "pathUSD on Ethereum L2", header: "Authorization: Payment" },
-                  { protocol: "x402", type: "Payment", mechanism: "USDC on Solana", header: "X-Payment" },
-                  { protocol: "ACP", type: "Payment", mechanism: "Checkout sessions", header: "X-ACP-Session" },
-                  { protocol: "AP2", type: "Authorization", mechanism: "Verifiable credentials", header: "X-AP2-Mandate" },
-                  { protocol: "AGTP", type: "Identity", mechanism: "Agent identification", header: "Agent-ID" },
+                  { protocol: "x402 (Solana)", status: "Production", mechanism: "USDC on Solana mainnet", header: "X-Payment" },
+                  { protocol: "x402 (Base)", status: "Production", mechanism: "USDC on Base", header: "X-Payment" },
+                  { protocol: "Tempo", status: "Gated off in production", mechanism: "pathUSD on Ethereum L2", header: "Authorization: Payment" },
+                  { protocol: "ACP", status: "Gated off in production", mechanism: "Checkout sessions", header: "X-ACP-Session" },
+                  { protocol: "AP2", status: "Gated off in production", mechanism: "Verifiable credentials", header: "X-AP2-Mandate" },
+                  { protocol: "AGTP", status: "Gated off in production", mechanism: "HMAC-signed agent certificates", header: "Agent-ID" },
                 ].map((row) => (
                   <tr key={row.protocol}>
                     <td className="px-5 py-3 font-mono text-mpp-amber text-xs">{row.protocol}</td>
-                    <td className="px-5 py-3 text-foreground text-xs">{row.type}</td>
+                    <td className="px-5 py-3 text-foreground text-xs">{row.status}</td>
                     <td className="px-5 py-3 text-muted-foreground text-xs">{row.mechanism}</td>
                     <td className="px-5 py-3 font-mono text-muted-foreground text-xs">{row.header}</td>
                   </tr>
@@ -213,11 +202,95 @@ export default function Docs() {
           </div>
         </section>
 
+        {/* Escrow-402 */}
+        <section id="escrow-402">
+          <h2 className="font-display text-2xl font-semibold text-foreground mb-4">Escrow-402: Payment Protection</h2>
+          <p className="text-muted-foreground text-sm leading-relaxed mb-4">
+            Every x402 payment on MPP32 is protected by <strong className="text-foreground">Escrow-402</strong> — a hold-then-release mechanism that ensures agents only pay for data that's actually useful. The payment is cryptographically verified <em>before</em> the upstream request, but settlement is deferred until the response passes a quality check. If the upstream returns garbage, the payment is never settled and no USDC leaves your wallet.
+          </p>
+          <p className="text-muted-foreground text-sm leading-relaxed mb-6">
+            Escrow-402 is automatic. No opt-in, no configuration, no SDK changes. It works with any x402 client — the MCP server, x402-fetch, or a hand-rolled signer.
+          </p>
+
+          <h3 className="text-foreground font-semibold text-sm mb-3">How it works</h3>
+          <div className="space-y-3 mb-6">
+            {[
+              { step: "1", label: "Verify (hold)", desc: "The proxy receives your signed X-Payment header and calls the x402 facilitator's /verify endpoint. This confirms your payment envelope is cryptographically valid and the USDC transfer is authorized — but no funds move yet." },
+              { step: "2", label: "Fetch upstream", desc: "With the payment verified in escrow, the proxy forwards your request to the upstream provider and waits for the response." },
+              { step: "3", label: "Quality check", desc: "The proxy evaluates the upstream response. It checks for server errors (5xx), unreachable endpoints, and empty response bodies on 200 OK." },
+              { step: "4a", label: "Settle (good response)", desc: "If the quality check passes, the proxy calls the facilitator's /settle endpoint. USDC moves on-chain from your wallet to the provider. You receive the data plus a settlement transaction signature." },
+              { step: "4b", label: "Skip (bad response)", desc: "If the quality check fails, settlement is skipped entirely. No USDC leaves your wallet. You still get the upstream response (so your agent can handle the error), plus headers explaining why payment was skipped." },
+            ].map((s) => (
+              <div key={s.step} className="card-surface rounded p-4 flex items-start gap-4">
+                <span className="font-mono text-mpp-amber text-xs mt-0.5 flex-shrink-0">{s.step.length === 1 ? `0${s.step}` : s.step}</span>
+                <div>
+                  <p className="text-foreground font-semibold text-sm mb-1">{s.label}</p>
+                  <p className="text-muted-foreground text-sm">{s.desc}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="card-surface rounded p-4 mb-6">
+            <p className="font-mono text-[10px] text-muted-foreground uppercase tracking-wider mb-2">Escrow flow</p>
+            <pre className="font-mono text-xs text-foreground leading-relaxed whitespace-pre-wrap">{`→ X-Payment: <signed-envelope>
+  ┌─ facilitator /verify ✓ (funds held, not settled)
+  ├─ proxy forwards request to upstream provider
+  ├─ upstream responds (200 OK, 5xx, timeout, etc.)
+  ├─ quality check: is this response worth paying for?
+  │
+  ├── YES → facilitator /settle → USDC moves on-chain
+  │   ← 200 OK + X-Escrow-Status: settled
+  │              X-Payment-Settled: true
+  │              X-Settlement-Tx: <solana-tx-signature>
+  │
+  └── NO  → settlement skipped, no funds move
+      ← 200/5xx + X-Escrow-Status: skipped
+                  X-Payment-Settled: false
+                  X-Escrow-Skip-Reason: upstream-server-error-503`}</pre>
+          </div>
+
+          <h3 className="text-foreground font-semibold text-sm mb-3">Response Headers</h3>
+          <div className="card-surface rounded overflow-hidden mb-6">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-mpp-border">
+                  <th className="text-left px-5 py-3 font-mono text-[10px] text-muted-foreground uppercase tracking-wider">Header</th>
+                  <th className="text-left px-5 py-3 font-mono text-[10px] text-muted-foreground uppercase tracking-wider">Values</th>
+                  <th className="text-left px-5 py-3 font-mono text-[10px] text-muted-foreground uppercase tracking-wider">Description</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-mpp-border">
+                {[
+                  { header: "X-Escrow-Status", values: "settled | skipped | settle-failed", desc: "Outcome of the escrow quality gate." },
+                  { header: "X-Payment-Settled", values: "true | false", desc: "Whether USDC actually moved on-chain for this request." },
+                  { header: "X-Settlement-Tx", values: "<tx-signature>", desc: "Solana transaction signature. Present only when settled." },
+                  { header: "X-Settlement-Method", values: "x402", desc: "Protocol used for settlement. Present only when settled." },
+                  { header: "X-Escrow-Skip-Reason", values: "upstream-server-error-5xx | upstream-unreachable | empty-response-body", desc: "Why payment was skipped. Present only when skipped." },
+                ].map((row) => (
+                  <tr key={row.header}>
+                    <td className="px-5 py-3 font-mono text-mpp-amber text-xs">{row.header}</td>
+                    <td className="px-5 py-3 font-mono text-muted-foreground text-xs">{row.values}</td>
+                    <td className="px-5 py-3 text-muted-foreground text-xs">{row.desc}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="card-surface border-l-2 border-mpp-amber/60 rounded p-4 bg-mpp-amber/5">
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              <span className="text-mpp-amber font-mono uppercase tracking-wider">Non-custodial:</span>{" "}
+              Escrow-402 works by deferring the facilitator's /settle call — not by holding USDC in an MPP32 wallet. At no point does MPP32 take custody of your funds. The x402 facilitator is the only entity that can settle the on-chain transfer, and it only does so when MPP32 explicitly calls /settle after the quality check passes.
+            </p>
+          </div>
+        </section>
+
         {/* M32 Token Discount */}
         <section id="token-discount">
           <h2 className="font-display text-2xl font-semibold text-foreground mb-4">M32 Token Holder Discounts</h2>
           <p className="text-muted-foreground text-sm leading-relaxed mb-4">
-            Hold M32 tokens in your Solana wallet to receive automatic fee reductions on the Intelligence Oracle. Pass your wallet address via the <code className="font-mono text-xs text-mpp-amber">X-Wallet-Address</code> header and the protocol verifies your on chain balance before constructing the 402 challenge.
+            Hold M32 tokens in a verified Solana wallet to receive automatic fee reductions on the Intelligence Oracle. The discount path is gated off in production until SIWS (Sign-In With Solana) wallet ownership verification ships, so a header alone cannot claim the rate. Once SIWS is live, a verified wallet's M32 balance is checked on-chain before the 402 challenge is constructed.
           </p>
           <div className="space-y-2 mb-4">
             {[
@@ -372,19 +445,19 @@ curl -X POST https://mpp32.org/api/intelligence \\
           <h2 className="font-display text-2xl font-semibold text-foreground mb-4">SDKs</h2>
           <div className="grid sm:grid-cols-3 gap-4">
             <div className="card-surface rounded p-5">
-              <p className="text-foreground font-semibold text-sm mb-1">mppx</p>
-              <p className="font-mono text-xs text-mpp-amber mb-2">npm install mppx</p>
-              <p className="text-muted-foreground text-xs">JavaScript/TypeScript SDK for Node.js and browsers. Handles the full 402 payment flow automatically.</p>
+              <p className="text-foreground font-semibold text-sm mb-1">mpp32-mcp-server</p>
+              <p className="font-mono text-xs text-mpp-amber mb-2">npx -y mpp32-mcp-server@latest</p>
+              <p className="text-muted-foreground text-xs">MCP server. Drop into Claude Desktop, Claude Code, Cursor, Windsurf, Continue, or Cline. Signs x402 payments locally on Solana or Base. The fastest path to a paying agent.</p>
             </div>
             <div className="card-surface rounded p-5">
-              <p className="text-foreground font-semibold text-sm mb-1">pympp</p>
-              <p className="font-mono text-xs text-mpp-amber mb-2">pip install pympp</p>
-              <p className="text-muted-foreground text-xs">Python SDK for scripting, data pipelines, and agent integrations. Wraps the requests library.</p>
+              <p className="text-foreground font-semibold text-sm mb-1">Direct REST</p>
+              <p className="font-mono text-xs text-mpp-amber mb-2">POST /api/agent/execute</p>
+              <p className="text-muted-foreground text-xs">Skip the MCP entirely. Call /api/agent/execute with an X-Agent-Key and your client signs the x402 challenge from any language with a Solana or Base SDK.</p>
             </div>
             <div className="card-surface rounded p-5">
-              <p className="text-foreground font-semibold text-sm mb-1">mpp32</p>
-              <p className="font-mono text-xs text-mpp-amber mb-2">npm install mpp32</p>
-              <p className="text-muted-foreground text-xs">High-level SDK for MPP32 platform. Handles all 5 supported protocol flows. One-line token analysis.</p>
+              <p className="text-foreground font-semibold text-sm mb-1">x402-axios / x402-fetch</p>
+              <p className="font-mono text-xs text-mpp-amber mb-2">npm install x402-fetch</p>
+              <p className="text-muted-foreground text-xs">Use Coinbase's reference x402 clients directly against any MPP32 endpoint. The proxy speaks standard x402, so off-the-shelf clients work.</p>
             </div>
           </div>
         </section>
@@ -418,7 +491,7 @@ curl -X POST https://mpp32.org/api/intelligence \\
           <section id="provider-overview">
             <h2 className="font-display text-2xl font-semibold text-foreground mb-4">Overview</h2>
             <p className="text-muted-foreground text-sm leading-relaxed mb-4">
-              The MPP32 proxy sits between callers and your API. When a user queries your slug, the proxy verifies their payment or credential across any of the 5 supported protocols, forwards the request to your endpoint, and returns your response. You never handle payments directly. They are deposited to your configured wallet address automatically.
+              The MPP32 proxy sits between callers and your API. When a user queries your slug, the proxy verifies their x402 payment on Solana or Base, forwards the request to your endpoint, and returns your response. You never handle payments directly. USDC settles straight to your configured payout wallet. Tempo, ACP, AP2, and AGTP envelopes are wired into the proxy but gated off in production until each protocol's client signer ships.
             </p>
             <p className="text-muted-foreground text-sm leading-relaxed mb-4">
               <strong className="text-foreground">You do not need to install an SDK or add middleware to your code.</strong>{" "}
@@ -579,11 +652,11 @@ curl https://mpp32.org/api/proxy/your-slug`}</pre>
             <p className="text-muted-foreground text-sm leading-relaxed mb-6">When a user queries your API through the proxy, the payment flow is fully automatic:</p>
             <div className="space-y-3 mb-4">
               {[
-                { step: "1", label: "User sends request", desc: "The caller submits a request to /api/proxy/your-slug with a payment or authorization credential using any of the 5 supported protocols." },
-                { step: "2", label: "MPP32 verifies credential", desc: "The proxy verifies the credential against the appropriate protocol. Invalid or missing credentials receive a 402 Payment Required response with challenge headers." },
-                { step: "3", label: "Request forwarded", desc: "Once payment or authorization is verified, the request is forwarded to your configured endpoint URL." },
-                { step: "4", label: "Payment settled", desc: "The payment amount (your configured price per query) is settled to your wallet via the protocol the caller used." },
-                { step: "5", label: "Response returned", desc: "Your endpoint's response is passed back to the caller. The entire round-trip is transparent to the end user." },
+                { step: "1", label: "User sends request", desc: "The caller submits a request to /api/proxy/your-slug. If a payment is required and missing, the proxy responds with an x402 Payment-Required envelope describing your payTo address, amount, and network." },
+                { step: "2", label: "MPP32 verifies the x402 payment (escrow hold)", desc: "The caller signs locally and retries with the base64 X-Payment header. The proxy calls the facilitator's /verify endpoint to confirm the payment is valid — but does not settle yet. Funds are held in escrow." },
+                { step: "3", label: "Request forwarded", desc: "With the payment held in escrow, the request is forwarded to your configured endpoint URL." },
+                { step: "4", label: "Escrow quality check", desc: "The proxy evaluates your response. If you return a valid response (2xx with a body), the escrow releases and USDC settles on-chain to your payout wallet. If your endpoint returns a 5xx error, is unreachable, or returns an empty body, settlement is skipped and the caller keeps their USDC." },
+                { step: "5", label: "Response returned", desc: "Your endpoint's response is passed back to the caller with escrow headers (X-Escrow-Status, X-Payment-Settled) indicating the payment outcome." },
               ].map((s) => (
                 <div key={s.step} className="card-surface rounded p-4 flex items-start gap-4">
                   <span className="font-mono text-mpp-amber text-xs mt-0.5 flex-shrink-0">0{s.step}</span>
@@ -594,10 +667,16 @@ curl https://mpp32.org/api/proxy/your-slug`}</pre>
                 </div>
               ))}
             </div>
-            <div className="card-surface border-l-2 border-mpp-amber/60 rounded p-4 bg-mpp-amber/5">
+            <div className="card-surface border-l-2 border-mpp-amber/60 rounded p-4 bg-mpp-amber/5 mb-4">
               <p className="text-xs text-muted-foreground leading-relaxed">
                 <span className="text-mpp-amber font-mono uppercase tracking-wider">Settlement:</span>{" "}
-                Payments settle via the protocol the caller used. Tempo settles in pathUSD to your EVM address, x402 settles in USDC to your Solana address, and ACP, AP2, and AGTP each follow their own settlement or authorization flow. Payouts arrive at your configured wallet with no additional claim step.
+                x402 payments settle in USDC straight to your payout wallet — on Solana mainnet via the Solana facilitator and on Base via the Base facilitator. No claim step. Tempo, ACP, AP2, and AGTP envelopes are wired but disabled in production until their client signers ship.
+              </p>
+            </div>
+            <div className="card-surface border-l-2 border-mpp-success/60 rounded p-4 bg-mpp-success/5">
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                <span className="text-mpp-success font-mono uppercase tracking-wider">Escrow-402:</span>{" "}
+                All x402 payments go through Escrow-402 automatically. The payment is verified before your endpoint is called, but USDC only settles to your wallet if your endpoint returns a valid response. If your endpoint is down or returns a server error, the caller keeps their USDC. This means callers trust that your service is worth paying for — and you get paid every time you deliver.
               </p>
             </div>
           </section>
@@ -635,7 +714,7 @@ curl https://mpp32.org/api/proxy/your-slug`}</pre>
                 },
                 {
                   issue: "No payments received",
-                  fix: "Verify your wallet addresses are correctly set in /manage. Tempo payments go to your EVM address, x402 payments go to your Solana address. Make sure the correct addresses are configured for each protocol you want to accept.",
+                  fix: "Verify your payout wallets are correctly set in /manage. x402 settles in USDC to your Solana address (Solana mainnet) or to your Base address (Base mainnet). Make sure the network you want to receive on has the matching address configured.",
                 },
                 {
                   issue: "Callers getting 404",
@@ -661,12 +740,12 @@ curl https://mpp32.org/api/proxy/your-slug`}</pre>
           <section id="agent-rest-api">
             <h2 className="font-display text-2xl font-semibold text-foreground mb-4">REST Agent API</h2>
             <p className="text-muted-foreground text-sm leading-relaxed mb-4">
-              The fastest way to give an existing agent the ability to call services across all 5 settlement protocols. Create a session, get a rate-limited API key, and call <code className="font-mono text-mpp-amber text-xs">/api/agent/execute</code> with any service slug. The router selects the optimal protocol and forwards 402 challenges from upstream services back to your agent — your wallet signs and retries.
+              The fastest way to give an existing agent the ability to call paid services without picking up an MCP client. Create a session, get a rate-limited API key, and call <code className="font-mono text-mpp-amber text-xs">/api/agent/execute</code> with any service slug. The proxy forwards 402 challenges from upstream services back to your agent — your wallet signs and retries.
             </p>
             <div className="rounded p-3 border-l-2 border-mpp-success/60 bg-mpp-success/5 mb-6">
               <p className="text-xs text-muted-foreground leading-relaxed">
                 <span className="text-mpp-success font-mono uppercase tracking-wider">Non-custodial:</span>{" "}
-                MPP32 NEVER spends USDC or any other asset on your behalf. Every paid call is settled by the caller's own wallet via the appropriate facilitator (x402 for Solana USDC, Tempo for pathUSD on L2). MPP32 verifies and forwards on-chain receipts; it never holds funds.
+                MPP32 NEVER spends USDC or any other asset on your behalf. Every paid call is settled by the caller's own wallet via the x402 facilitator on Solana or Base. MPP32 verifies and forwards on-chain receipts; it never holds funds.
               </p>
             </div>
             <p className="text-muted-foreground text-sm leading-relaxed mb-6">
@@ -727,14 +806,14 @@ curl https://mpp32.org/api/proxy/your-slug`}</pre>
 #     "discountActive":         false,
 #     "verificationNotice":     "Wallet stored but ownership is NOT verified. SIWS sign-in coming soon — discounts only apply once verified.",
 #     "custodyDisclosure":      "MPP32 never holds custody of your funds...",
-#     "protocols":              ["tempo", "x402", "acp", "ap2", "agtp"]
+#     "protocols":              ["x402"]   // production-enabled rails today
 #   }
 # }`}</pre>
             </div>
 
             <h3 className="text-foreground font-semibold text-sm mb-3">Execute a paid call (sign with your own wallet)</h3>
             <p className="text-muted-foreground text-xs leading-relaxed mb-3">
-              The first call returns 402 with the x402 challenge. Sign with your own wallet (e.g. via the <code className="font-mono text-foreground">mppx</code> SDK) and retry with the <code className="font-mono text-foreground">X-Payment</code> header. The facilitator verifies and settles on-chain — MPP32 never spends on your behalf.
+              The first call returns 402 with the x402 challenge. Sign with your own wallet (the MPP32 MCP server does this automatically; a hand-rolled client uses <code className="font-mono text-foreground">@solana/web3.js</code> or an EVM SDK plus a Coinbase x402 reference client) and retry with the <code className="font-mono text-foreground">X-Payment</code> header. The facilitator verifies and settles on-chain — MPP32 never spends on your behalf.
             </p>
             <div className="card-surface rounded p-4 mb-6">
               <pre className="font-mono text-xs text-foreground leading-relaxed whitespace-pre-wrap">{`# Step 1: First call returns 402 with the challenge
@@ -781,7 +860,12 @@ curl -X POST https://mpp32.org/api/agent/execute \\
 #       "settled":               true,
 #       "settlementTxSignature": "5q...solana_tx",
 #       "settlementExplorerUrl": "https://solscan.io/tx/5q...",
-#       "latencyMs":             312
+#       "latencyMs":             312,
+#       "escrow": {
+#         "status":      "settled",
+#         "skipReason":  null,
+#         "description": "Payment settled on-chain after upstream quality check passed"
+#       }
 #     }
 #   }
 # }`}</pre>
@@ -881,6 +965,62 @@ export const tokenIntelligenceTool = tool(
             </p>
           </section>
 
+          {/* Escrow-402 for Agents */}
+          <section id="agent-escrow">
+            <h2 className="font-display text-2xl font-semibold text-foreground mb-4">Escrow-402: Automatic Payment Protection</h2>
+            <p className="text-muted-foreground text-sm leading-relaxed mb-4">
+              Every x402 payment through MPP32 is protected by <strong className="text-foreground">Escrow-402</strong>. When your agent signs an x402 payment, the proxy verifies the payment but holds settlement until the upstream provider actually delivers a valid response. If the provider is down, returns a server error, or sends an empty body — your agent keeps its USDC.
+            </p>
+            <p className="text-muted-foreground text-sm leading-relaxed mb-6">
+              Escrow is fully automatic. No configuration needed. Your agent can read the escrow outcome from response headers or the <code className="font-mono text-foreground text-xs">meta.escrow</code> object in the execute response.
+            </p>
+
+            <h3 className="text-foreground font-semibold text-sm mb-3">Reading escrow status</h3>
+            <div className="card-surface rounded p-4 mb-6">
+              <pre className="font-mono text-xs text-foreground leading-relaxed whitespace-pre-wrap">{`# In the /api/agent/execute response:
+{
+  "data": {
+    "result": { ... },
+    "meta": {
+      "settled": true,
+      "escrow": {
+        "status": "settled",         // "settled" | "skipped" | "settle-failed"
+        "skipReason": null,          // null when settled
+        "description": "Payment settled on-chain after upstream quality check passed"
+      }
+    }
+  }
+}
+
+# When upstream fails:
+{
+  "data": {
+    "result": { ... },
+    "meta": {
+      "settled": false,
+      "escrow": {
+        "status": "skipped",
+        "skipReason": "upstream-server-error-503",
+        "description": "Settlement skipped — upstream-server-error-503"
+      }
+    }
+  }
+}
+
+# Response headers (also available):
+# X-Escrow-Status: settled | skipped | settle-failed
+# X-Payment-Settled: true | false
+# X-Escrow-Skip-Reason: upstream-server-error-503 (when skipped)`}</pre>
+            </div>
+
+            <div className="card-surface border-l-2 border-mpp-success/60 rounded p-4 bg-mpp-success/5">
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                <span className="text-mpp-success font-mono uppercase tracking-wider">Agent safety:</span>{" "}
+                Escrow-402 means your autonomous agent can call paid services without risk of paying for garbage. If a provider's endpoint goes down mid-operation, your agent's USDC stays in its wallet. This makes it safe to let agents operate with real budgets on real services.
+              </p>
+            </div>
+          </section>
+
           {/* What MPP32 does NOT do — trust differentiator */}
           <section id="agent-not-custodial">
             <h2 className="font-display text-2xl font-semibold text-foreground mb-4">What MPP32 does NOT do</h2>
@@ -891,7 +1031,7 @@ export const tokenIntelligenceTool = tool(
               {[
                 {
                   title: "We do NOT custody funds",
-                  body: "No MPP32 wallet holds your USDC, pathUSD, or any other asset. Every paid call is signed by your own wallet using the standard challenge-response flow defined by x402, Tempo, ACP, AP2, or AGTP.",
+                  body: "No MPP32 wallet holds your USDC or any other asset. Every paid call is signed by your own wallet using the standard x402 challenge-response flow on Solana or Base.",
                 },
                 {
                   title: "We do NOT pre-fund or extend credit",
@@ -930,7 +1070,7 @@ export const tokenIntelligenceTool = tool(
             <div className="card-surface border-l-2 border-mpp-amber/60 rounded p-4 bg-mpp-amber/5">
               <p className="text-xs text-muted-foreground leading-relaxed">
                 <span className="text-mpp-amber font-mono uppercase tracking-wider">One command:</span>{" "}
-                Install with <span className="font-mono text-foreground">npx mpp32-mcp-server</span>. No global install, no API keys. Just a funded wallet and your agent is ready to pay for intelligence.
+                Install with <span className="font-mono text-foreground">npx -y mpp32-mcp-server@latest</span>. No global install. Grab an <span className="font-mono text-foreground">MPP32_AGENT_KEY</span> at <Link to="/agent-console" className="text-mpp-amber hover:underline">mpp32.org/agent-console</Link>, paste in a Solana or Base private key for paid services, and your agent is ready.
               </p>
             </div>
           </section>
@@ -943,18 +1083,18 @@ export const tokenIntelligenceTool = tool(
                 {
                   step: "1",
                   label: "Install",
-                  desc: "The MCP server runs directly via npx. No global installation required. It connects to MPP32's API and exposes two tools for your agent.",
-                  code: "npx mpp32-mcp-server",
+                  desc: "The MCP server runs directly via npx. No global installation required. It connects to MPP32's API and exposes four tools for your agent: list_mpp32_services, call_mpp32_endpoint, get_solana_token_intelligence, and get_mpp32_diagnostics.",
+                  code: "npx -y mpp32-mcp-server@latest",
                 },
                 {
                   step: "2",
                   label: "Configure your agent",
-                  desc: "Add the server to your MCP-compatible agent configuration. Provide an EVM private key (for Tempo) and/or a Solana private key (for x402). Additional protocols like ACP, AP2, and AGTP are configured via environment variables. The MCP server selects the best available protocol automatically.",
+                  desc: "Add the server to your MCP client config (Claude Desktop, Claude Code, Cursor, Windsurf). Provide MPP32_AGENT_KEY (from /agent-console), and either MPP32_SOLANA_PRIVATE_KEY (base58 secret key for x402 on Solana) or MPP32_PRIVATE_KEY (0x-prefixed EVM key for x402 on Base). Set MPP32_PREFERRED_NETWORK if both are configured and you want to pin a network. Free services work without any payment key.",
                 },
                 {
                   step: "3",
                   label: "Start using",
-                  desc: "Ask your agent to browse MPP32 services or call a specific endpoint. The MCP server handles service discovery and the full HTTP 402 payment flow automatically.",
+                  desc: "Ask your agent to browse MPP32 services or call a specific endpoint. The MCP server handles service discovery and the full x402 payment flow automatically. Call get_mpp32_diagnostics first if anything misbehaves — it confirms which env vars actually reached the child process and prints Ready to pay: YES when the wallet is wired correctly.",
                 },
               ].map((s) => (
                 <div key={s.step} className="card-surface rounded p-4 flex items-start gap-4">
@@ -978,18 +1118,27 @@ export const tokenIntelligenceTool = tool(
   "mcpServers": {
     "mpp32": {
       "command": "npx",
-      "args": ["mpp32-mcp-server"],
+      "args": ["-y", "mpp32-mcp-server@latest"],
       "env": {
         "MPP32_AGENT_KEY": "mpp32_agent_…",
-        "MPP32_SOLANA_PRIVATE_KEY": "your-solana-private-key (optional, for paid services)",
-        "MPP32_PRIVATE_KEY": "your-tempo-private-key (optional, for paid services)"
+        "MPP32_SOLANA_PRIVATE_KEY": "<base58 64-byte Solana secret key, optional>",
+        "MPP32_PRIVATE_KEY": "<0x-prefixed EVM key for x402 on Base, optional>"
       }
     }
   }
 }
-// Get MPP32_AGENT_KEY at mpp32.org/agent-console — every call is then
-// attributed to your dashboard. Free curated services (DexScreener,
-// Jupiter price, CoinGecko ping, httpbin) work without any payment key.`}</pre>
+// MPP32_SOLANA_PRIVATE_KEY is the base58-encoded 64-byte secret key
+// (what Phantom shows under "show private key"), NOT the seed phrase.
+// From a keypair.json file, convert it once with:
+//   node -e "console.log(require('bs58').encode(Buffer.from(JSON.parse(require('fs').readFileSync('keypair.json')))))"
+//
+// Fund the wallet with USDC plus a small amount of native SOL for
+// transaction fees (about 0.001 SOL covers many calls). A USDC-only
+// wallet returns "insufficient funds for rent".
+//
+// Get MPP32_AGENT_KEY at mpp32.org/agent-console. Free curated services
+// (DexScreener, Jupiter price, CoinGecko ping, httpbin) work without
+// any payment key.`}</pre>
             </div>
           </section>
 
@@ -1031,7 +1180,7 @@ export const tokenIntelligenceTool = tool(
                   <span className="font-mono text-sm text-foreground">call_mpp32_endpoint</span>
                 </div>
                 <p className="text-muted-foreground text-sm mb-4">
-                  Calls a machine-payable API endpoint. Handles the full 402 payment flow across all 5 supported protocols (Tempo, x402, ACP, AP2, AGTP): sends initial request, receives payment challenge, completes the payment or authorization, and retries with proof.
+                  Calls a machine-payable API endpoint. Handles the full x402 payment flow end-to-end: sends the initial request, reads the 402 challenge, signs a USDC payment on Solana or Base with the configured private key, retries with the X-Payment header, and returns the data plus the on-chain settlement signature.
                 </p>
                 <div className="card-surface rounded overflow-hidden border border-mpp-border">
                   <table className="w-full text-sm">
@@ -1117,13 +1266,18 @@ Agent: I'll query the intelligence endpoint for BONK.
                   </tr>
                   <tr>
                     <td className="px-5 py-3 font-mono text-mpp-amber text-xs">MPP32_SOLANA_PRIVATE_KEY</td>
-                    <td className="px-5 py-3 text-foreground text-sm">For paid services</td>
-                    <td className="px-5 py-3 text-muted-foreground text-xs">Solana wallet private key for x402 USDC payments. Preferred protocol when both this and MPP32_PRIVATE_KEY are set. Free services do not require a payment key.</td>
+                    <td className="px-5 py-3 text-foreground text-sm">For paid x402 on Solana</td>
+                    <td className="px-5 py-3 text-muted-foreground text-xs">Base58-encoded 64-byte Solana secret key (the value Phantom exports under "show private key", not the seed phrase). Used to sign USDC payments locally. Never leaves your machine. The wallet also needs roughly 0.001 SOL on hand to cover network fees.</td>
                   </tr>
                   <tr>
                     <td className="px-5 py-3 font-mono text-mpp-amber text-xs">MPP32_PRIVATE_KEY</td>
-                    <td className="px-5 py-3 text-foreground text-sm">For paid services</td>
-                    <td className="px-5 py-3 text-muted-foreground text-xs">EVM-compatible private key for Tempo payments (pathUSD). Used as a fallback when x402 is unavailable.</td>
+                    <td className="px-5 py-3 text-foreground text-sm">For paid x402 on Base</td>
+                    <td className="px-5 py-3 text-muted-foreground text-xs">0x-prefixed EVM private key for x402 USDC payments on Base. Used when a service only advertises an EVM payment network.</td>
+                  </tr>
+                  <tr>
+                    <td className="px-5 py-3 font-mono text-mpp-amber text-xs">MPP32_PREFERRED_NETWORK</td>
+                    <td className="px-5 py-3 text-muted-foreground text-sm">No</td>
+                    <td className="px-5 py-3 text-muted-foreground text-xs">When both signing keys are present and a challenge advertises multiple networks, force one. Accepts <code className="font-mono text-foreground">solana</code>, <code className="font-mono text-foreground">base</code>, <code className="font-mono text-foreground">evm</code>, or a full CAIP-2 string.</td>
                   </tr>
                   <tr>
                     <td className="px-5 py-3 font-mono text-mpp-amber text-xs">MPP32_API_URL</td>
@@ -1162,8 +1316,8 @@ Agent: I'll query the intelligence endpoint for BONK.
             <h2 className="font-display text-2xl font-semibold text-foreground mb-4">Open Source</h2>
             <div className="card-surface rounded p-5">
               <p className="text-foreground font-semibold text-sm mb-1">mpp32-mcp-server</p>
-              <p className="font-mono text-xs text-mpp-amber mb-2">npm install -g mpp32-mcp-server</p>
-              <p className="text-muted-foreground text-xs mb-4">MIT-licensed. Contributions welcome. The MCP server is a thin wrapper around MPP32's public API with no proprietary dependencies.</p>
+              <p className="font-mono text-xs text-mpp-amber mb-2">npx -y mpp32-mcp-server@latest</p>
+              <p className="text-muted-foreground text-xs mb-4">MIT-licensed. Listed in the official Model Context Protocol registry. The MCP server is a thin wrapper around MPP32's public API with no proprietary dependencies.</p>
               <div className="flex gap-3">
                 <a
                   href="https://www.npmjs.com/package/mpp32-mcp-server"

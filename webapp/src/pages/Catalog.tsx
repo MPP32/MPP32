@@ -32,6 +32,9 @@ interface CatalogService {
   protocol: string;
   protocols: string[];
   network: string | null;
+  chain: string;
+  chainLabel: string;
+  testnet: boolean;
   asset: string | null;
   basePrice: number | null;
   effectivePrice: number | null;
@@ -39,6 +42,9 @@ interface CatalogService {
   tags: string[];
   popularity: number;
   verified: boolean;
+  healthStatus: "unknown" | "reachable" | "challenge_valid" | "payment_verified" | "broken";
+  healthCheckedAt: string | null;
+  healthError: string | null;
 }
 
 interface CatalogResponse {
@@ -46,7 +52,7 @@ interface CatalogResponse {
   total: number;
   limit: number;
   offset: number;
-  filters: { protocol?: string; category?: string; source?: string; q?: string };
+  filters: { protocol?: string; category?: string; source?: string; network?: string; chain?: string; q?: string };
   discountPercent: number;
 }
 
@@ -55,6 +61,8 @@ interface CatalogStats {
   byProtocol: { protocol: string; count: number }[];
   byCategory: { category: string; count: number }[];
   bySource: { source: string; count: number }[];
+  byChain: { chain: string; label: string; testnet: boolean; count: number }[];
+  byHealth: { status: string; count: number }[];
   recentCrawls: {
     id: string;
     source: string;
@@ -110,6 +118,69 @@ function ProtocolBadge({ protocol }: { protocol: string }) {
   );
 }
 
+function HealthBadge({ status, error }: { status: string; error: string | null }) {
+  const config: Record<string, { label: string; cls: string; title: string }> = {
+    payment_verified: {
+      label: "Pmt-Verified",
+      cls: "border-emerald-400/40 text-emerald-300 bg-emerald-400/10",
+      title: "Confirmed: at least one payment has settled on-chain via MPP32",
+    },
+    challenge_valid: {
+      label: "Verified",
+      cls: "border-green-400/40 text-green-300 bg-green-400/10",
+      title: "Confirmed: provider returns a valid x402 payment challenge",
+    },
+    reachable: {
+      label: "Reachable",
+      cls: "border-mpp-amber/30 text-mpp-amber bg-mpp-amber/5",
+      title: "Endpoint responds but no payment gate observed (likely free or auth-walled)",
+    },
+    broken: {
+      label: "Broken",
+      cls: "border-red-400/40 text-red-300 bg-red-400/10",
+      title: error ?? "Health check failed",
+    },
+    unknown: {
+      label: "Unchecked",
+      cls: "border-mpp-border text-muted-foreground bg-white/5",
+      title: "Health not yet verified",
+    },
+  };
+  const cfg = config[status] ?? config.unknown;
+  return (
+    <span
+      className={`text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded border ${cfg.cls}`}
+      title={cfg.title}
+    >
+      {cfg.label}
+    </span>
+  );
+}
+
+function NetworkBadge({ chain, label, testnet }: { chain: string; label: string; testnet: boolean }) {
+  if (chain === "unknown") return null;
+  const styles: Record<string, string> = {
+    solana: "border-violet-400/40 text-violet-300 bg-violet-400/5",
+    base: "border-sky-400/30 text-sky-300 bg-sky-400/5",
+    ethereum: "border-indigo-400/30 text-indigo-300 bg-indigo-400/5",
+    optimism: "border-red-400/30 text-red-300 bg-red-400/5",
+    polygon: "border-purple-400/30 text-purple-300 bg-purple-400/5",
+    arbitrum: "border-blue-400/30 text-blue-300 bg-blue-400/5",
+    stellar: "border-yellow-400/30 text-yellow-300 bg-yellow-400/5",
+  };
+  const root = chain.replace(/-(sepolia|testnet|devnet)$/, "");
+  const cls = styles[root] ?? "border-mpp-border text-muted-foreground bg-white/5";
+  return (
+    <span
+      className={`text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded border ${cls}`}
+      title={testnet ? `${label} (testnet)` : label}
+    >
+      {label}
+      {testnet && <span className="ml-1 opacity-60">·test</span>}
+    </span>
+  );
+}
+
 function CategoryIcon({ category }: { category: string | null }) {
   switch (category) {
     case "ai-inference":
@@ -132,6 +203,8 @@ export default function Catalog() {
   const [protocol, setProtocol] = useState<string>("");
   const [category, setCategory] = useState<string>("");
   const [source, setSource] = useState<string>("");
+  const [chain, setChain] = useState<string>("");
+  // Default to "working" — only verified-reachable or challenge-valid services.
   const [offset, setOffset] = useState(0);
   const PAGE = 50;
 
@@ -141,10 +214,11 @@ export default function Catalog() {
     if (protocol) p.set("protocol", protocol);
     if (category) p.set("category", category);
     if (source) p.set("source", source);
+    if (chain) p.set("chain", chain);
     p.set("limit", String(PAGE));
     p.set("offset", String(offset));
     return p.toString();
-  }, [q, protocol, category, source, offset]);
+  }, [q, protocol, category, source, chain, offset]);
 
   const { data: stats } = useQuery<CatalogStats>({
     queryKey: ["catalog", "stats"],
@@ -174,6 +248,7 @@ export default function Catalog() {
     setProtocol("");
     setCategory("");
     setSource("");
+    setChain("");
     setOffset(0);
   };
 
@@ -221,9 +296,16 @@ export default function Catalog() {
 
           {/* Stat strip */}
           {stats && (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-8">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-8">
               <StatTile label="Total Services" value={stats.total.toLocaleString()} icon={<Database className="w-4 h-4" />} />
               <StatTile label="x402 Resources" value={(stats.byProtocol.find(p => p.protocol === 'x402')?.count ?? 0).toLocaleString()} icon={<Globe className="w-4 h-4" />} />
+              <StatTile
+                label="On Solana"
+                value={(stats.byChain.find(c => c.chain === 'solana')?.count ?? 0).toLocaleString()}
+                icon={<Wallet className="w-4 h-4" />}
+                onClick={() => { setChain('solana'); setOffset(0); }}
+                active={chain === 'solana'}
+              />
               <StatTile label="MCP Tools" value={(stats.byProtocol.find(p => p.protocol === 'mcp')?.count ?? 0).toLocaleString()} icon={<Layers className="w-4 h-4" />} />
               <StatTile label="Last Crawled" value={formatLastCrawl(stats.recentCrawls[0]?.finishedAt ?? stats.recentCrawls[0]?.startedAt ?? null)} icon={<Clock className="w-4 h-4" />} />
             </div>
@@ -239,6 +321,21 @@ export default function Catalog() {
               <Filter className="w-3.5 h-3.5" />
               <span>Filters</span>
             </div>
+
+            <FilterSelect
+              label="Network"
+              value={chain}
+              onChange={(v) => { setChain(v); setOffset(0); }}
+              options={[
+                { value: "", label: "All networks" },
+                ...(stats?.byChain
+                  .filter((c) => c.chain !== "unknown")
+                  .map((c) => ({
+                    value: c.chain,
+                    label: `${c.label} (${c.count.toLocaleString()})`,
+                  })) ?? []),
+              ]}
+            />
 
             <FilterSelect
               label="Protocol"
@@ -279,7 +376,7 @@ export default function Catalog() {
               ]}
             />
 
-            {(q || protocol || category || source) && (
+            {(q || protocol || category || source || chain) && (
               <button
                 onClick={resetFilters}
                 className="text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-1"
@@ -368,16 +465,43 @@ export default function Catalog() {
   );
 }
 
-function StatTile({ label, value, icon }: { label: string; value: string | number; icon: React.ReactNode }) {
-  return (
-    <div className="border border-mpp-border bg-mpp-surface rounded p-3">
+function StatTile({
+  label,
+  value,
+  icon,
+  onClick,
+  active,
+}: {
+  label: string;
+  value: string | number;
+  icon: React.ReactNode;
+  onClick?: () => void;
+  active?: boolean;
+}) {
+  const cls = `border rounded p-3 text-left transition-colors ${
+    active
+      ? "border-mpp-amber/60 bg-mpp-amber/10"
+      : onClick
+        ? "border-mpp-border bg-mpp-surface hover:border-mpp-amber/40 cursor-pointer"
+        : "border-mpp-border bg-mpp-surface"
+  }`;
+  const inner = (
+    <>
       <div className="flex items-center gap-1.5 text-muted-foreground text-[10px] font-mono uppercase tracking-widest mb-1">
         {icon}
         {label}
       </div>
       <p className="text-xl font-semibold text-foreground">{value}</p>
-    </div>
+    </>
   );
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} className={cls} aria-pressed={active}>
+        {inner}
+      </button>
+    );
+  }
+  return <div className={cls}>{inner}</div>;
 }
 
 function FilterSelect({
@@ -457,6 +581,7 @@ function ServiceCard({ service }: { service: CatalogService }) {
           </h3>
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
+          <HealthBadge status={service.healthStatus} error={service.healthError} />
           {isFree && !stdio && (
             <span className="text-[9px] font-mono text-green-500 bg-green-500/10 border border-green-500/30 rounded px-1 py-0.5 uppercase tracking-wider">
               Free
@@ -479,6 +604,9 @@ function ServiceCard({ service }: { service: CatalogService }) {
 
       <div className="flex flex-wrap items-center gap-1 mb-3">
         {protocols.slice(0, 3).map((p) => <ProtocolBadge key={p} protocol={p} />)}
+        {service.chain && service.chain !== "unknown" && (
+          <NetworkBadge chain={service.chain} label={service.chainLabel} testnet={service.testnet} />
+        )}
         {service.category && (
           <span className="text-[10px] font-mono text-muted-foreground bg-white/5 border border-mpp-border/50 rounded px-1.5 py-0.5">
             {service.category}

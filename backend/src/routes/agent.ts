@@ -33,6 +33,17 @@ const QuoteRequestSchema = z.object({
 const ExecuteRequestSchema = z.object({
   service: z.string().min(1),
   method: z.enum(['GET', 'POST', 'PUT', 'DELETE']).default('POST'),
+  // Path appended to the resolved service base URL for external entries that
+  // store only a base URL (e.g. https://api.exa.ai with path /search). For
+  // native services that already store a full path, this is ignored.
+  // Must start with `/`, no `..` segments, no schemes.
+  path: z
+    .string()
+    .max(2048)
+    .regex(/^\/[A-Za-z0-9._~!$&'()*+,;=:@%/\-?#]*$/, 'Path must start with "/" and contain only URL-safe characters')
+    .refine((p) => !p.includes('..'), 'Path must not contain ".."')
+    .refine((p) => !/^\/{2,}/.test(p), 'Path must not start with multiple slashes')
+    .optional(),
   body: z.any().optional(),
   query: z.record(z.string(), z.string()).optional(),
   protocol: z.enum(['tempo', 'x402', 'acp', 'ap2', 'agtp']).optional(),
@@ -149,7 +160,7 @@ agentRouter.post('/sessions', async (c) => {
       protocols: getEnabledProtocols(),
       usage: `Include header: X-Agent-Key: ${apiKey}`,
       custodyDisclosure:
-        'MPP32 never holds custody of your funds. Paid services are settled by your own wallet via x402 (Solana USDC), Tempo (Eth L2 pathUSD), or ACP. MPP32 verifies and forwards — it never spends on your behalf.',
+        'MPP32 never holds custody of your funds. Paid services are settled by your own wallet via x402 (Solana USDC). MPP32 verifies and forwards — it never spends on your behalf.',
     },
   }, 201)
 })
@@ -285,19 +296,34 @@ agentRouter.post('/quote', async (c) => {
  */
 agentRouter.post('/execute', rateLimitByKey({ name: 'agent-execute', max: 120, windowMs: 60_000 }), async (c) => {
   const agentKey = c.req.header('x-agent-key')
+  // Anti-hallucination envelope. Autonomous agents (Claude et al) previously
+  // pattern-matched a plain "401 Unauthorized" here to "provider needs an API
+  // key" and invented URLs like deepnets.ai/api-keys. The structured fields
+  // below — `authScope: 'mpp32_session'` and `doNotPromptForProviderApiKey` —
+  // make the cause unambiguous. Do not soften the wording.
+  const mpp32AuthEnvelope = (message: string, code: string) => ({
+    error: {
+      message,
+      code,
+      authScope: 'mpp32_session',
+      doNotPromptForProviderApiKey: true,
+      remedy: 'Create an MPP32 agent session: POST /api/agent/sessions → use the returned apiKey as X-Agent-Key on subsequent calls. This is NOT a provider auth error; do not ask the user for any third-party API key.',
+      docs: 'https://mpp32.org/docs/agents#sessions',
+    },
+  })
   if (!agentKey) {
-    return c.json({ error: { message: 'Missing X-Agent-Key header. Create a session first via POST /api/agent/sessions', code: 'AUTH_REQUIRED' } }, 401)
+    return c.json(mpp32AuthEnvelope('MPP32 session header missing. This is NOT a provider auth failure — no third-party API key is required.', 'MPP32_SESSION_REQUIRED'), 401)
   }
 
   const agentKeyHash = createHash('sha256').update(agentKey).digest('hex')
   const session = await prisma.agentSession.findUnique({ where: { apiKey: agentKeyHash } })
   if (!session || !session.isActive) {
-    return c.json({ error: { message: 'Invalid or inactive session', code: 'INVALID_SESSION' } }, 401)
+    return c.json(mpp32AuthEnvelope('MPP32 session not found or inactive. Create a new session via POST /api/agent/sessions.', 'MPP32_SESSION_INVALID'), 401)
   }
 
   if (session.expiresAt && session.expiresAt < new Date()) {
     await prisma.agentSession.update({ where: { id: session.id }, data: { isActive: false } })
-    return c.json({ error: { message: 'Session expired', code: 'SESSION_EXPIRED' } }, 401)
+    return c.json(mpp32AuthEnvelope('MPP32 session expired. Renew via POST /api/agent/sessions.', 'MPP32_SESSION_EXPIRED'), 401)
   }
 
   const body = await c.req.json().catch(() => null)
@@ -306,7 +332,7 @@ agentRouter.post('/execute', rateLimitByKey({ name: 'agent-execute', max: 120, w
     return c.json({ error: { message: 'Invalid request', code: 'VALIDATION_ERROR', fields: parsed.error.flatten().fieldErrors } }, 400)
   }
 
-  const { service, method, body: reqBody, query } = parsed.data
+  const { service, method, body: reqBody, query, path } = parsed.data
   const startTime = Date.now()
 
   type ResolvedService = {
@@ -317,6 +343,7 @@ agentRouter.post('/execute', rateLimitByKey({ name: 'agent-execute', max: 120, w
     sourceKind: 'native' | 'external'
     isFree: boolean
     protocol?: string
+    defaultPath?: string | null
   }
   let submission: ResolvedService | null = null
 
@@ -343,9 +370,26 @@ agentRouter.post('/execute', rateLimitByKey({ name: 'agent-execute', max: 120, w
     } else {
       const ext = await prisma.externalService.findUnique({
         where: { slug: service },
-        select: { slug: true, name: true, endpointUrl: true, pricePerQuery: true, protocol: true, source: true },
+        select: { slug: true, name: true, endpointUrl: true, pricePerQuery: true, protocol: true, source: true, metadata: true },
       })
       if (ext) {
+        // Curated entries store an upstream `defaultPath` (e.g. '/search' for
+        // Exa) inside the JSON metadata blob. We read it here so callers that
+        // don't supply an explicit `path` still hit a real endpoint instead of
+        // the upstream's root (which would 404). Parsing is best-effort: a
+        // malformed metadata string degrades gracefully to "no defaultPath".
+        let defaultPath: string | null = null
+        if (ext.metadata) {
+          try {
+            const parsedMeta = JSON.parse(ext.metadata) as Record<string, unknown>
+            const dp = parsedMeta?.defaultPath
+            if (typeof dp === 'string' && dp.startsWith('/') && !dp.includes('..') && !/^\/{2,}/.test(dp)) {
+              defaultPath = dp
+            }
+          } catch {
+            // metadata isn't JSON — fine, no defaultPath available
+          }
+        }
         submission = {
           slug: ext.slug,
           name: ext.name,
@@ -354,6 +398,7 @@ agentRouter.post('/execute', rateLimitByKey({ name: 'agent-execute', max: 120, w
           sourceKind: 'external',
           isFree: !ext.pricePerQuery || ext.pricePerQuery <= 0 || ext.source === 'free',
           protocol: ext.protocol,
+          defaultPath,
         }
       }
     }
@@ -443,6 +488,21 @@ agentRouter.post('/execute', rateLimitByKey({ name: 'agent-execute', max: 120, w
         )
       }
       const url = ssrf.parsedUrl!
+      // Append a path to the upstream's base URL. Curated catalog entries
+      // (Exa, Firecrawl, OpenAI x402 gateway, ...) store only a base origin
+      // like `https://api.exa.ai`; the real endpoint lives at `/search` or
+      // `/v1/...`. Without this, every external call lands at `POST /` → 404.
+      // Caller-supplied `path` wins; otherwise we fall back to the curated
+      // `defaultPath` stored in the service metadata, so the agent can drive
+      // these services without having to memorize each upstream's API shape.
+      // The schema regex already constrained `path` to start with `/` and
+      // rejects `..` traversal and double-leading-slashes; `defaultPath` was
+      // sanitized when read from metadata above.
+      const effectivePath = path ?? submission.defaultPath ?? null
+      if (effectivePath) {
+        const basePath = url.pathname.replace(/\/+$/, '')
+        url.pathname = `${basePath}${effectivePath}`.replace(/\/{2,}/g, '/')
+      }
       if (query) {
         for (const [k, v] of Object.entries(query)) url.searchParams.set(k, String(v))
       }
@@ -466,6 +526,10 @@ agentRouter.post('/execute', rateLimitByKey({ name: 'agent-execute', max: 120, w
     const settlementTx = proxyRes.headers.get('x-settlement-tx')
     const m32DiscountHeader = proxyRes.headers.get('x-m32-discount')
     if (m32DiscountHeader) discountPercent = parseFloat(m32DiscountHeader) || 0
+
+    // Escrow-402 headers from the middleware
+    const escrowStatus = proxyRes.headers.get('x-escrow-status')
+    const escrowSkipReason = proxyRes.headers.get('x-escrow-skip-reason')
 
     if (statusCode === 402) {
       // Forward 402 challenge verbatim — caller's wallet must sign and retry
@@ -538,6 +602,9 @@ agentRouter.post('/execute', rateLimitByKey({ name: 'agent-execute', max: 120, w
   const latencyMs = Date.now() - startTime
   const success = statusCode >= 200 && statusCode < 300
 
+  const txEscrowStatus = upstreamHeaders['x-escrow-status'] ?? null
+  const txEscrowSkipReason = upstreamHeaders['x-escrow-skip-reason'] ?? null
+
   await Promise.all([
     prisma.agentTransaction.create({
       data: {
@@ -555,6 +622,8 @@ agentRouter.post('/execute', rateLimitByKey({ name: 'agent-execute', max: 120, w
         success,
         errorMessage,
         requestPayload: reqBody ? JSON.stringify(reqBody).slice(0, 1000) : null,
+        escrowStatus: txEscrowStatus,
+        escrowSkipReason: txEscrowSkipReason,
       },
     }),
     prisma.agentSession.update({
@@ -570,6 +639,8 @@ agentRouter.post('/execute', rateLimitByKey({ name: 'agent-execute', max: 120, w
   // Surface settlement headers to the agent caller so they can verify on-chain
   if (settlementTxSignature) c.header('X-Settlement-Tx', settlementTxSignature)
   if (paymentMethod) c.header('X-Settlement-Method', paymentMethod)
+  if (txEscrowStatus) c.header('X-Escrow-Status', txEscrowStatus)
+  if (txEscrowSkipReason) c.header('X-Escrow-Skip-Reason', txEscrowSkipReason)
 
   return c.json({
     data: {
@@ -594,6 +665,15 @@ agentRouter.post('/execute', rateLimitByKey({ name: 'agent-execute', max: 120, w
         statusCode,
         success,
         custody: 'MPP32 never spends on your behalf. Settled = verified on-chain by the facilitator. Unsettled = the call was free or the upstream returned 402.',
+        escrow: txEscrowStatus ? {
+          status: txEscrowStatus,
+          skipReason: txEscrowSkipReason,
+          description: txEscrowStatus === 'settled'
+            ? 'Payment was escrowed and released after upstream delivered a valid response.'
+            : txEscrowStatus === 'skipped'
+              ? 'Payment was NOT settled — upstream response failed quality checks. Your wallet was not charged.'
+              : 'Escrow settlement was attempted but failed. Contact support if funds were deducted.',
+        } : null,
       },
     },
   })
@@ -658,6 +738,7 @@ agentRouter.get('/services', async (c) => {
   })
 
   let externalServices: Array<Record<string, unknown>> = []
+  let externalTotalAvailable = 0
   if (includeExternal) {
     const extWhere: Record<string, unknown> = { active: true }
     if (category) extWhere.category = category
@@ -672,11 +753,15 @@ agentRouter.get('/services', async (c) => {
       ]
     }
 
-    const ext = await prisma.externalService.findMany({
-      where: extWhere,
-      orderBy: [{ verified: 'desc' }, { popularity: 'desc' }, { name: 'asc' }],
-      take: limit,
-    })
+    const [ext, extTotal] = await Promise.all([
+      prisma.externalService.findMany({
+        where: extWhere,
+        orderBy: [{ verified: 'desc' }, { popularity: 'desc' }, { name: 'asc' }],
+        take: limit,
+      }),
+      prisma.externalService.count({ where: extWhere }),
+    ])
+    externalTotalAvailable = extTotal
 
     externalServices = ext.map((e) => {
       const base = e.pricePerQuery ?? null
@@ -707,11 +792,22 @@ agentRouter.get('/services', async (c) => {
     })
   }
 
+  const externalTruncated = includeExternal && externalTotalAvailable > externalServices.length
   return c.json({
     data: {
       services: [...nativeServices, ...externalServices],
       total: nativeServices.length + externalServices.length,
       counts: { native: nativeServices.length, external: externalServices.length },
+      totalAvailable: {
+        native: nativeServices.length,
+        external: externalTotalAvailable,
+        combined: nativeServices.length + externalTotalAvailable,
+      },
+      limit,
+      truncated: externalTruncated,
+      hint: externalTruncated
+        ? `Showing ${externalServices.length} of ${externalTotalAvailable} external services. Use \`q\`, \`category\`, \`source\`, or \`protocol\` to filter, or increase \`limit\` (max 500).`
+        : undefined,
       protocols: getEnabledProtocols(),
       discount: discountInfo,
       discountNotice: 'Discounts only apply once your wallet ownership has been signature-verified. M32 holders 250K+ get 20% off, 1M+ get 40% off.',

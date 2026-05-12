@@ -2,6 +2,7 @@ import { isX402Enabled } from './x402.js'
 import { isAP2Enabled } from './ap2.js'
 import { isACPEnabled } from './acp.js'
 import { isAGTPEnabled } from './agtp.js'
+import { isTempoEnabled } from './mpp.js'
 import { getM32Balance, calculateDiscount, type DiscountResult } from './solana-token.js'
 
 export type ProtocolId = 'tempo' | 'x402' | 'acp' | 'ap2' | 'agtp'
@@ -91,7 +92,7 @@ const PROTOCOL_META: Record<ProtocolId, Omit<ProtocolStatus, 'enabled'>> = {
 
 export function getProtocolStatuses(): ProtocolStatus[] {
   return [
-    { ...PROTOCOL_META.tempo, enabled: true },
+    { ...PROTOCOL_META.tempo, enabled: isTempoEnabled() },
     { ...PROTOCOL_META.x402, enabled: isX402Enabled() },
     { ...PROTOCOL_META.acp, enabled: isACPEnabled() },
     { ...PROTOCOL_META.ap2, enabled: isAP2Enabled() },
@@ -100,7 +101,8 @@ export function getProtocolStatuses(): ProtocolStatus[] {
 }
 
 export function getEnabledProtocols(): ProtocolId[] {
-  const enabled: ProtocolId[] = ['tempo']
+  const enabled: ProtocolId[] = []
+  if (isTempoEnabled()) enabled.push('tempo')
   if (isX402Enabled()) enabled.push('x402')
   if (isACPEnabled()) enabled.push('acp')
   if (isAP2Enabled()) enabled.push('ap2')
@@ -137,7 +139,10 @@ export function selectOptimalProtocol(
   if (enabled.includes('x402')) {
     return { protocol: 'x402', reasoning: 'x402 default — native Solana USDC, fastest settlement' }
   }
-  return { protocol: 'tempo', reasoning: 'Tempo fallback — always available EVM L2 payments' }
+  // No protocol is enabled. Return x402 as the name so callers can render
+  // something, but the protocols[] array marks it unavailable — agents should
+  // not attempt to use it.
+  return { protocol: 'x402', reasoning: 'No payment protocols are currently enabled on this server' }
 }
 
 export async function getQuote(
@@ -158,7 +163,7 @@ export async function getQuote(
   const protocols: ProtocolQuote[] = [
     {
       protocol: 'tempo',
-      available: true,
+      available: enabled.includes('tempo'),
       effectivePrice,
       currency: 'pathUSD',
       estimatedSettlement: '<1s',

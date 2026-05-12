@@ -26,6 +26,8 @@ model ApiRequest {
   agtpAgentCertId    String?
   agtpVerified       Boolean  @default(false)
   protocolUsed       String?
+  escrowStatus       String?
+  escrowSkipReason   String?
   createdAt          DateTime @default(now())
 
   @@index([submissionSlug, createdAt])
@@ -36,6 +38,7 @@ model ApiRequest {
   @@index([acpSessionId])
   @@index([agtpAgentCertId])
   @@index([protocolUsed])
+  @@index([escrowStatus])
 }
 
 model Submission {
@@ -150,6 +153,8 @@ model AgentTransaction {
   success               Boolean
   errorMessage          String?
   requestPayload        String?
+  escrowStatus          String?
+  escrowSkipReason      String?
   createdAt             DateTime @default(now())
 
   session         AgentSession @relation(fields: [sessionId], references: [id])
@@ -160,6 +165,7 @@ model AgentTransaction {
   @@index([service])
   @@index([settled])
   @@index([createdAt])
+  @@index([escrowStatus])
 }
 
 model ExternalService {
@@ -186,6 +192,18 @@ model ExternalService {
   popularity      Int      @default(0)
   verified        Boolean  @default(false)
   active          Boolean  @default(true)
+  // Provider Qualification Layer — health-checked status of this listing.
+  // unknown          = never checked
+  // reachable        = TCP/TLS works, server responded (free/MCP HTTP)
+  // challenge_valid  = returned a parseable x402/Tempo/etc. challenge
+  // payment_verified = at least one settled tx via MPP32
+  // broken           = persistent failure, malformed challenge, or non-compliant
+  healthStatus      String    @default("unknown")
+  healthCheckedAt   DateTime?
+  healthError       String?
+  healthFailCount   Int       @default(0)
+  challengeSample   String?
+  providerFeePayer  String?
   firstSeenAt     DateTime @default(now())
   lastSeenAt      DateTime @default(now())
   createdAt       DateTime @default(now())
@@ -198,6 +216,8 @@ model ExternalService {
   @@index([active])
   @@index([popularity])
   @@index([lastSeenAt])
+  @@index([healthStatus])
+  @@index([healthCheckedAt])
 }
 
 model CatalogCrawlRun {

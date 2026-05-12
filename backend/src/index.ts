@@ -727,8 +727,86 @@ setInterval(reverifyEndpoints, REVERIFY_INTERVAL_MS)
 
 // ---- Catalog seeding & periodic refresh ----
 import { runAllCrawlers } from './lib/catalog/runner.js'
+import { runHealthBackfill } from './lib/catalog/health.js'
 
 const CATALOG_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000 // 6 hours
+// A crawled row is "stale" — eligible for re-check — once this much time has
+// passed since its last health probe. Anything newly inserted has
+// healthCheckedAt=null and always qualifies.
+const HEALTH_STALE_AFTER_MS = 6 * 60 * 60 * 1000
+const HEALTH_BACKFILL_CONCURRENCY = parseInt(
+  process.env.HEALTH_BACKFILL_CONCURRENCY ?? '15',
+  10,
+) || 15
+// Soft cap per cron tick so the first run after a 5k-row crawl does not block
+// the process for an hour. Anything left over is picked up on the next tick.
+const HEALTH_BACKFILL_MAX_PER_TICK = parseInt(
+  process.env.HEALTH_BACKFILL_MAX_PER_TICK ?? '1500',
+  10,
+) || 1500
+// Independent backfill cadence — chews through the long tail of `unknown` rows
+// without waiting for the next 6h crawl. 30 min × 1500 rows ≈ 3 hours to clear
+// a fresh 5k-row catalog from cold.
+const HEALTH_BACKFILL_INTERVAL_MS = 30 * 60 * 1000
+
+// Walks every recently-crawled service whose healthStatus is unknown OR whose
+// last check is older than HEALTH_STALE_AFTER_MS, probes the endpoint, and
+// writes back healthStatus / providerFeePayer / challengeSample. Catches its
+// own errors so a single misbehaving host can't take the cron down.
+async function backfillStaleHealth(reason: string): Promise<void> {
+  try {
+    const cutoff = new Date(Date.now() - HEALTH_STALE_AFTER_MS)
+    const services = await prisma.externalService.findMany({
+      where: {
+        active: true,
+        OR: [
+          { healthCheckedAt: null },
+          { healthCheckedAt: { lt: cutoff } },
+        ],
+      },
+      select: { id: true, slug: true, protocol: true, endpointUrl: true },
+      // Newest rows first so freshly-crawled listings get verified before the
+      // long tail of stale ones.
+      orderBy: { lastSeenAt: 'desc' },
+      take: HEALTH_BACKFILL_MAX_PER_TICK,
+    })
+
+    if (services.length === 0) {
+      logEntry('info', 'Health backfill skipped — nothing stale', { reason })
+      return
+    }
+
+    logEntry('info', 'Starting health backfill', {
+      reason,
+      candidates: services.length,
+      concurrency: HEALTH_BACKFILL_CONCURRENCY,
+    })
+
+    const summary = await runHealthBackfill(services, {
+      concurrency: HEALTH_BACKFILL_CONCURRENCY,
+      perResult: async (id, r) => {
+        await prisma.externalService.update({
+          where: { id },
+          data: {
+            healthStatus: r.status,
+            healthCheckedAt: new Date(),
+            healthError: r.error?.slice(0, 500) ?? r.reason ?? null,
+            challengeSample: r.challengeSample ?? null,
+            providerFeePayer: r.providerFeePayer ?? null,
+            healthFailCount: r.status === 'broken' ? { increment: 1 } : 0,
+          },
+        })
+      },
+    })
+
+    logEntry('info', 'Health backfill complete', { reason, ...summary })
+  } catch (err) {
+    logEntry('error', 'Health backfill failed', {
+      reason,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+}
 
 async function refreshCatalog(reason: string) {
   logEntry('info', 'Starting catalog crawl', { reason })
@@ -744,6 +822,10 @@ async function refreshCatalog(reason: string) {
       error: r.errorMessage ?? null,
     }))
     logEntry('info', 'Catalog crawl complete', { reason, summary })
+    // Newly-inserted rows land with healthStatus="unknown", and the catalog
+    // UI hides those by default ("working" filter). Run the qualifier now so
+    // the next page render reflects what the crawl just brought in.
+    await backfillStaleHealth(`after:${reason}`)
   } catch (err) {
     logEntry('error', 'Catalog crawl failed', {
       reason,
@@ -758,8 +840,26 @@ async function seedCatalogIfEmpty() {
     if (count === 0) {
       logEntry('info', 'Catalog empty — seeding from crawlers')
       await refreshCatalog('initial-seed')
-    } else {
-      logEntry('info', 'Catalog already populated', { count })
+      return
+    }
+    logEntry('info', 'Catalog already populated', { count })
+
+    // Catch the case where a prior deploy populated the catalog but never ran
+    // a health probe — every row stays `unknown` and the default UI filter
+    // hides them. Backfill once on boot so the catalog renders something on
+    // the first page view after deploy.
+    const checked = await prisma.externalService.count({
+      where: { active: true, healthCheckedAt: { not: null } },
+    })
+    if (checked === 0) {
+      logEntry('info', 'No services have ever been health-checked — running boot backfill')
+      // Fire and forget — backfill is bounded by HEALTH_BACKFILL_MAX_PER_TICK
+      // so it can't run forever, and subsequent ticks pick up the tail.
+      backfillStaleHealth('boot:no-checks-yet').catch((err) =>
+        logEntry('error', 'Boot health backfill threw', {
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      )
     }
   } catch (err) {
     logEntry('error', 'Failed to check/seed catalog', {
@@ -773,6 +873,18 @@ seedCatalogIfEmpty()
 setInterval(() => {
   refreshCatalog('scheduled-refresh')
 }, CATALOG_REFRESH_INTERVAL_MS)
+
+// Separate cadence to keep chewing through stale rows between crawl ticks.
+// If a previous backfill is still running, the next interval just acquires its
+// own batch from the DB — the per-host gate inside runHealthBackfill prevents
+// duplicate concurrent probes against the same provider.
+setInterval(() => {
+  backfillStaleHealth('scheduled-tail').catch((err) =>
+    logEntry('error', 'Scheduled health backfill threw', {
+      error: err instanceof Error ? err.message : String(err),
+    }),
+  )
+}, HEALTH_BACKFILL_INTERVAL_MS)
 
 
 async function seedOracleSubmission() {

@@ -748,6 +748,9 @@ function SessionDetailView({
           </p>
         </div>
 
+        {/* Claude Desktop / Cursor / Windsurf one-click config */}
+        <McpClientConfig apiKey={stored.apiKey} />
+
         {/* Honest stats grid: only counts that correspond to real on-chain state */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <MiniStat
@@ -1033,6 +1036,183 @@ function SettlementChip({ meta }: { meta: ExecuteMeta | undefined }) {
     <span className="bg-mpp-bg border border-mpp-border rounded px-2 py-0.5 text-muted-foreground" title="No payment recorded for this call">
       —
     </span>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  McpClientConfig — drop-in JSON for Claude Desktop / Cursor / etc.  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Renders a copy-pastable `mcpServers` config block with the user's freshly
+ * issued agent key already substituted in. This is the single most important
+ * artifact on /agent-console — the issued key is useless to a new user until
+ * they know where to paste it. The accompanying notes call out the two things
+ * that have historically tripped new users up:
+ *   1. MPP32_SOLANA_PRIVATE_KEY format (base58 secret key, not keypair.json).
+ *   2. They need both USDC AND a small amount of native SOL for fees.
+ */
+function McpClientConfig({ apiKey }: { apiKey: string }) {
+  const [tab, setTab] = useState<"with-key" | "without-key">("with-key");
+
+  const withKeySnippet = `{
+  "mcpServers": {
+    "mpp32": {
+      "command": "npx",
+      "args": ["-y", "mpp32-mcp-server@latest"],
+      "env": {
+        "MPP32_AGENT_KEY": "${apiKey}",
+        "MPP32_SOLANA_PRIVATE_KEY": "PASTE_YOUR_BASE58_SOLANA_SECRET_KEY"
+      }
+    }
+  }
+}`;
+
+  const withoutKeySnippet = `{
+  "mcpServers": {
+    "mpp32": {
+      "command": "npx",
+      "args": ["-y", "mpp32-mcp-server@latest"],
+      "env": {
+        "MPP32_AGENT_KEY": "${apiKey}"
+      }
+    }
+  }
+}`;
+
+  const text = tab === "with-key" ? withKeySnippet : withoutKeySnippet;
+
+  return (
+    <div className="rounded border border-mpp-amber/30 bg-mpp-amber/5 p-4 mb-4">
+      <div className="flex items-center justify-between gap-2 mb-3">
+        <div className="flex items-center gap-1.5">
+          <Terminal className="w-3.5 h-3.5 text-mpp-amber" />
+          <span className="font-mono text-[10px] text-mpp-amber uppercase tracking-wider">
+            Connect Claude Desktop, Cursor, Windsurf, or Claude Code
+          </span>
+        </div>
+        <CopyButton text={text} />
+      </div>
+
+      <div className="flex border-b border-mpp-amber/20 mb-3">
+        <button
+          onClick={() => setTab("with-key")}
+          className={cn(
+            "px-3 py-1.5 font-mono text-[11px] transition-colors relative",
+            tab === "with-key"
+              ? "text-mpp-amber"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          With payment key (x402)
+          {tab === "with-key" && (
+            <span className="absolute bottom-0 left-0 right-0 h-px bg-mpp-amber" />
+          )}
+        </button>
+        <button
+          onClick={() => setTab("without-key")}
+          className={cn(
+            "px-3 py-1.5 font-mono text-[11px] transition-colors relative",
+            tab === "without-key"
+              ? "text-mpp-amber"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          Free services only
+          {tab === "without-key" && (
+            <span className="absolute bottom-0 left-0 right-0 h-px bg-mpp-amber" />
+          )}
+        </button>
+      </div>
+
+      <pre className="bg-mpp-bg p-3 rounded text-[11px] font-mono text-foreground overflow-x-auto scrollbar-thin whitespace-pre leading-relaxed border border-mpp-border">
+        {text}
+      </pre>
+
+      <div className="mt-3 space-y-2 text-[11px] text-muted-foreground leading-relaxed">
+        <p className="flex items-start gap-1.5">
+          <span className="font-mono text-mpp-amber flex-shrink-0">file:</span>
+          <span>
+            <span className="font-mono text-foreground">Claude Desktop</span>{" "}
+            macOS{" "}
+            <code className="font-mono text-foreground/80">
+              ~/Library/Application Support/Claude/claude_desktop_config.json
+            </code>{" "}
+            · Windows{" "}
+            <code className="font-mono text-foreground/80">
+              %APPDATA%\Claude\claude_desktop_config.json
+            </code>{" "}
+            ·{" "}
+            <span className="font-mono text-foreground">Cursor</span>{" "}
+            <code className="font-mono text-foreground/80">
+              ~/.cursor/mcp.json
+            </code>{" "}
+            ·{" "}
+            <span className="font-mono text-foreground">Windsurf</span>{" "}
+            <code className="font-mono text-foreground/80">
+              ~/.codeium/windsurf/mcp_config.json
+            </code>
+            . Fully quit and reopen the client after editing.
+          </span>
+        </p>
+        {tab === "with-key" && (
+          <>
+            <p className="flex items-start gap-1.5">
+              <span className="font-mono text-mpp-amber flex-shrink-0">key:</span>
+              <span>
+                <code className="font-mono text-foreground">
+                  MPP32_SOLANA_PRIVATE_KEY
+                </code>{" "}
+                must be the 64-byte Solana secret key, base58 encoded — the
+                value Phantom shows under{" "}
+                <code className="font-mono text-foreground/80">
+                  settings &raquo; show private key
+                </code>
+                , not the recovery phrase. From a{" "}
+                <code className="font-mono text-foreground/80">
+                  keypair.json
+                </code>{" "}
+                file (the array form Solana CLI writes), convert with{" "}
+                <code className="font-mono text-foreground/80">
+                  node -e "console.log(require('bs58').encode(Buffer.from(JSON.parse(require('fs').readFileSync('keypair.json')))))"
+                </code>
+                . Never share it; it can move funds.
+              </span>
+            </p>
+            <p className="flex items-start gap-1.5">
+              <span className="font-mono text-mpp-amber flex-shrink-0">fund:</span>
+              <span>
+                Wallet needs both USDC (for the payment itself) and a tiny
+                amount of native SOL (for the transaction fee, typically{" "}
+                <code className="font-mono text-foreground/80">
+                  0.001 SOL
+                </code>{" "}
+                covers many calls). A USDC-only wallet will fail with{" "}
+                <code className="font-mono text-foreground/80">
+                  insufficient funds for rent
+                </code>{" "}
+                even though USDC is plentiful.
+              </span>
+            </p>
+            <p className="flex items-start gap-1.5">
+              <span className="font-mono text-mpp-amber flex-shrink-0">test:</span>
+              <span>
+                Inside Claude, ask:{" "}
+                <span className="text-foreground italic">
+                  "Run the mpp32 diagnostics tool"
+                </span>
+                . The tool prints{" "}
+                <code className="font-mono text-foreground/80">
+                  Ready to pay: YES
+                </code>{" "}
+                when the agent key, the Solana key, and the API are all wired
+                up correctly.
+              </span>
+            </p>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
