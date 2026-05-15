@@ -296,8 +296,33 @@ X-AGTP-Supported: true`}</CodeBlock>
             {/* 8. Token Utility */}
             <Section id="token" title="8. Token Utility">
               <p>
-                The MPP32 token is the protocol's fee reduction and governance layer. Holding M32 tokens reduces the per query cost on the MPP32 Intelligence Oracle. Callers pass their Solana wallet address via the <code className="font-mono text-xs text-mpp-amber">X-Wallet-Address</code> header and the protocol verifies the on chain M32 balance in real time before constructing the payment challenge. Discounts apply automatically with no registration required.
+                The M32 token unlocks exclusive API products and reduces per-query fees across the protocol. Holding M32 grants direct access to token-gated endpoints that are unavailable to non-holders, and reduces the cost of the MPP32 Intelligence Oracle. Callers pass their Solana wallet address via the <code className="font-mono text-xs text-mpp-amber">X-Wallet-Address</code> header and the protocol verifies the on-chain M32 balance in real time.
               </p>
+
+              <p className="font-mono text-mpp-amber text-xs uppercase tracking-widest pt-2">M32-Gated Exclusive APIs</p>
+              <p>
+                Three production APIs are available exclusively to M32 token holders. Each requires a minimum on-chain balance verified at request time. Non-holders receive a 403 response with details on the required balance.
+              </p>
+              <div className="space-y-2">
+                {[
+                  { api: "Whale Tracker", requirement: "Hold 1,000,000+ M32", desc: "Top 20 holder analysis, concentration risk, buy/sell pressure for any Solana token" },
+                  { api: "Token Comparison", requirement: "Hold 2,500,000+ M32", desc: "Head-to-head intelligence battle between two tokens with side-by-side scoring" },
+                  { api: "Portfolio Scanner", requirement: "Hold 5,000,000+ M32", desc: "Full wallet scan with per-token intelligence and aggregate portfolio risk" },
+                ].map((t) => (
+                  <div
+                    key={t.api}
+                    className="rounded p-3 bg-mpp-bg border border-mpp-border"
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-foreground text-sm font-medium">{t.api}</span>
+                      <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-mpp-success/10 text-mpp-success border border-mpp-success/20">LIVE</span>
+                    </div>
+                    <p className="text-muted-foreground text-xs">{t.requirement} — {t.desc}</p>
+                  </div>
+                ))}
+              </div>
+
+              <p className="font-mono text-mpp-amber text-xs uppercase tracking-widest pt-4">Fee Reduction Tiers</p>
               <div className="space-y-2">
                 {[
                   { tier: "Standard (no tokens)", rate: "0.008 USD / query", note: "Base rate" },
@@ -394,7 +419,7 @@ X-AGTP-Supported: true`}</CodeBlock>
                   {
                     phase: "Phase 02",
                     status: "In Progress",
-                    items: "Token gated fee reduction (LIVE), API key system for high volume providers, provider revenue dashboards with export, webhook notifications, additional payment protocol integration as new standards emerge, provider SDK improvements.",
+                    items: "Token gated fee reduction (LIVE), M32-gated exclusive APIs — Whale Tracker, Token Comparison, Portfolio Scanner (LIVE), API key system for high volume providers, provider revenue dashboards with export, webhook notifications, additional payment protocol integration as new standards emerge, provider SDK improvements.",
                   },
                   {
                     phase: "Phase 03",

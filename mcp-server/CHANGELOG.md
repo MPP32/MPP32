@@ -4,6 +4,83 @@ All notable changes to `mpp32-mcp-server` are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-05-15
+
+### Fixed
+
+* **Diagnostics tool referenced non-existent `query_intelligence`.** The
+  `get_mpp32_diagnostics` "Ready to pay" message told users to try
+  `query_intelligence`, which was never a tool name. Now correctly says
+  `get_solana_token_intelligence`.
+
+* **`protocol` filter missing from `list_mpp32_services`.** The tool
+  description and the backend both support filtering by payment protocol
+  (x402, tempo, acp, ap2, agtp), but the parameter was never wired
+  through. Added `protocol` as an optional enum parameter and forwarded
+  it to the backend query string.
+
+* **`server.json` version stuck at 1.2.2.** The MCP registry manifest
+  was never bumped past 1.2.2, causing the official registry listing to
+  advertise the wrong version. Updated to 1.3.1 with all new env vars.
+
+* **`server.json` missing `MPP32_PREFERRED_NETWORK` and `MPP32_TIMEOUT_MS`
+  environment variables.** Both were supported since 1.2.3 and 1.1.2
+  respectively but never declared in the registry manifest.
+
+### Added
+
+* **README now documents all M32-gated tools.** `get_m32_whale_tracker`,
+  `compare_tokens_m32`, and `scan_portfolio_m32` were live in the server
+  but missing from the README's tools section.
+
+* **README now documents `MPP32_SOLANA_RPC_URL` and `MPP32_TIMEOUT_MS`**
+  in the configuration table.
+
+## [1.3.0] - 2026-05-14
+
+### Added
+
+* **Economic Circuit Breakers — infrastructure-level spending guardrails.**
+  The first MCP payment server with built-in budget enforcement. No more
+  runaway agent bills.
+
+  - **`manage_agent_budget` tool** — new MCP tool to view, set, or reset
+    spending limits directly from Claude, Cursor, or any MCP client.
+    Supports three actions:
+    - `get`: View current budget status (remaining balance, hourly velocity,
+      circuit breaker state, per-service spending breakdown).
+    - `set`: Configure `budgetLimitUsd` (total session cap), `velocityLimitUsd`
+      (hourly max), and `alertThresholdPercent` (warning threshold).
+    - `reset`: Manually clear a tripped circuit breaker so the session can
+      resume spending.
+
+  - **Per-session budget limits** — set a maximum total spend in USD when
+    creating a session or at any time via the new `manage_agent_budget` tool.
+    When the limit is reached, the circuit breaker trips and all paid calls
+    are blocked until manually reset or the budget is increased.
+
+  - **Velocity (hourly) limits** — cap how fast an agent can spend. Prevents
+    infinite-loop scenarios where an agent drains a wallet in minutes.
+
+  - **Automatic circuit breaker** — trips instantly when budget or velocity
+    limits are exceeded. Sticky by design: agents cannot auto-resume spending.
+    Requires explicit reset via the MCP tool or API.
+
+  - **Budget status in every response** — all `call_mpp32_endpoint` and
+    `get_solana_token_intelligence` responses now include remaining budget,
+    utilization percentage, and circuit breaker state when limits are
+    configured.
+
+  - **Circuit breaker error handling** — when a circuit breaker is tripped,
+    the MCP server returns a clear, actionable message explaining what
+    happened and how to resume (via `manage_agent_budget`).
+
+### Changed
+
+* **`formatExecuteSuccess` now includes budget status.** When budget limits
+  are configured, successful responses include a one-line budget summary
+  (remaining balance and utilization %).
+
 ## [1.2.4] - 2026-05-11
 
 ### Fixed

@@ -35,6 +35,7 @@ MPP32 replaces all of that with one MCP server. Your agent asks for a service by
 * Run real time Solana token intelligence with alpha scoring, rug risk, whale flow, and 24 hour pump probability.
 * Track every call, every dollar settled, and every protocol used from a dashboard at mpp32.org.
 * Get an automatic 20 percent or 40 percent discount on native services for holding M32 once your wallet is verified.
+* Access M32-gated exclusive APIs: Whale Tracker (1M M32), Token Comparison (2.5M M32), and Portfolio Scanner (5M M32) — free for holders, unavailable to non-holders.
 
 ## Install
 
@@ -98,6 +99,8 @@ Tip: call the `get_mpp32_diagnostics` tool from inside Claude. It probes the API
 | `MPP32_SOLANA_PRIVATE_KEY` | Paid x402 calls on Solana | Base58 encoded Solana secret key. Used to sign USDC payments locally. Never leaves your machine. |
 | `MPP32_PRIVATE_KEY` | Paid x402 calls on Base | 0x prefixed EVM private key. Used to sign USDC payments on Base when a provider only accepts EVM. |
 | `MPP32_PREFERRED_NETWORK` | Optional override | When both keys are configured and the challenge advertises multiple networks, force one. Accepts `solana`, `base`, `evm`, or a full CAIP-2 string. |
+| `MPP32_SOLANA_RPC_URL` | Optional | Override the Solana RPC endpoint used to fetch recent blockhashes when building x402 transactions. Defaults to `https://api.mainnet-beta.solana.com`. Set this if you hit public rate limits. |
+| `MPP32_TIMEOUT_MS` | Optional | Request timeout in milliseconds for all outbound API calls. Range 1000 to 300000. Defaults to 30000 (30 seconds). |
 | `MPP32_API_URL` | Custom deployments | Override the API base URL. Defaults to `https://mpp32.org`. |
 
 Private keys stay on your machine. They sign payments locally and never travel to MPP32 servers. Provide either or both for paid calls. If both are present and a challenge advertises both networks, EVM is preferred unless `MPP32_PREFERRED_NETWORK` is set; if only one key is configured, that network wins automatically.
@@ -148,7 +151,55 @@ Real time analysis of any Solana token. Pulls live data from DexScreener, Jupite
 { "token": "BONK" }
 ```
 
-M32 holders will get tiered discounts (20 percent at 250k, 40 percent at 1M) once SIWS wallet signature verification ships. The discount path is gated off in production until then so it cannot be claimed by spoofing a wallet header.
+M32 holders get tiered discounts (20 percent at 250k, 40 percent at 1M) once SIWS wallet signature verification ships. The discount path is gated off in production until then so it cannot be claimed by spoofing a wallet header. M32 holders also get exclusive access to three token-gated APIs: Whale Tracker (1M M32), Token Comparison (2.5M M32), and Portfolio Scanner (5M M32) — these are live now and require passing your wallet address via the `X-Wallet-Address` header.
+
+### `get_m32_whale_tracker`
+
+M32-gated whale analysis for any Solana token. Returns top 20 holders, concentration risk, holder distribution, and buy/sell pressure. Requires the caller to hold 1,000,000+ M32 tokens (balance verified on-chain). Free for qualifying holders.
+
+```json
+{ "token": "<mint-address>", "walletAddress": "<your-solana-wallet>" }
+```
+
+### `compare_tokens_m32`
+
+M32-gated head-to-head intelligence comparison of two Solana tokens. Returns side-by-side alpha scores, rug risk, whale activity, volume, liquidity, and a winner verdict. Requires 2,500,000+ M32 tokens.
+
+```json
+{ "tokenA": "<mint-A>", "tokenB": "<mint-B>", "walletAddress": "<your-solana-wallet>" }
+```
+
+### `scan_portfolio_m32`
+
+M32-gated full wallet portfolio scan. Discovers all SPL tokens in a wallet, runs intelligence on top holdings, and returns per-token analysis with aggregate risk metrics. Requires 5,000,000+ M32 tokens.
+
+```json
+{ "wallet": "<wallet-to-scan>", "walletAddress": "<your-solana-wallet>" }
+```
+
+### `manage_agent_budget`
+
+View, set, or reset the economic circuit breaker for your agent session. Prevents runaway spending with infrastructure-level budget enforcement.
+
+```json
+{ "action": "get" }
+```
+
+```json
+{ "action": "set", "budgetLimitUsd": 10.0, "velocityLimitUsd": 1.0, "alertThresholdPercent": 80 }
+```
+
+```json
+{ "action": "reset" }
+```
+
+Three actions:
+
+* **get** returns current budget status: remaining balance, hourly velocity, circuit breaker state, and per-service spending breakdown.
+* **set** configures `budgetLimitUsd` (max total session spend), `velocityLimitUsd` (max spend per hour), and `alertThresholdPercent` (warn at this percentage of budget used). All three are optional and can be set independently.
+* **reset** clears a tripped circuit breaker so the session can resume spending. Circuit breakers trip automatically when limits are exceeded and stay tripped until manually reset.
+
+Budget limits can also be set at session creation time via the agent console at mpp32.org/agent-console or by passing `budgetLimitUsd`, `velocityLimitUsd`, and `alertThresholdPercent` to `POST /api/agent/sessions`.
 
 ## How discovery works
 

@@ -43,6 +43,9 @@ interface CreatedSession {
   protocols: string[];
   verificationNotice?: string | null;
   custodyDisclosure?: string;
+  budgetLimitUsd?: number | null;
+  velocityLimitUsd?: number | null;
+  alertThresholdPercent?: number | null;
   createdAt: string;
 }
 
@@ -65,6 +68,16 @@ interface SessionDetail {
     lastActivityAt: string | null;
     expiresAt: string | null;
     createdAt: string;
+    budgetLimitUsd: number | null;
+    velocityLimitUsd: number | null;
+    alertThresholdPercent: number | null;
+    totalSpentUsd: number;
+    remainingBudgetUsd: number | null;
+    hourlySpendUsd: number;
+    circuitBreakerTripped: boolean;
+    circuitBreakerReason: string | null;
+    circuitBreakerTrippedAt: string | null;
+    budgetUtilizationPercent: number | null;
   };
   protocolBreakdown: Array<{
     protocol: string;
@@ -446,6 +459,10 @@ function CreateSessionForm({
   const [walletAddress, setWalletAddress] = useState("");
   const [preferredProtocol, setPreferredProtocol] = useState<string>("");
   const [balancePreview, setBalancePreview] = useState<WalletBalanceResponse | null>(null);
+  const [showBudgetSection, setShowBudgetSection] = useState(false);
+  const [budgetLimitUsd, setBudgetLimitUsd] = useState("");
+  const [velocityLimitUsd, setVelocityLimitUsd] = useState("");
+  const [alertThresholdPercent, setAlertThresholdPercent] = useState(80);
 
   const balanceMutation = useMutation({
     mutationFn: () =>
@@ -470,6 +487,9 @@ function CreateSessionForm({
       if (agentName.trim()) payload.agentName = agentName.trim();
       if (walletAddress.trim()) payload.walletAddress = walletAddress.trim();
       if (preferredProtocol) payload.preferredProtocol = preferredProtocol;
+      if (showBudgetSection && budgetLimitUsd) payload.budgetLimitUsd = parseFloat(budgetLimitUsd);
+      if (showBudgetSection && velocityLimitUsd) payload.velocityLimitUsd = parseFloat(velocityLimitUsd);
+      if (showBudgetSection) payload.alertThresholdPercent = alertThresholdPercent;
       return api.post<Omit<CreatedSession, "createdAt">>(
         "/api/agent/sessions",
         payload
@@ -620,6 +640,64 @@ function CreateSessionForm({
             </select>
         </Field>
 
+        {/* Spending Guardrails (collapsible) */}
+        <div className="border border-mpp-border rounded">
+          <button
+            type="button"
+            onClick={() => setShowBudgetSection(!showBudgetSection)}
+            className="w-full flex items-center justify-between px-4 py-3 text-sm text-foreground hover:bg-mpp-surface/50 transition-colors"
+          >
+            <span className="flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-mpp-amber" />
+              <span className="font-mono text-xs uppercase tracking-wider">Spending Guardrails</span>
+              <span className="text-[10px] text-muted-foreground">(Optional)</span>
+            </span>
+            <span className={`text-muted-foreground transition-transform ${showBudgetSection ? 'rotate-180' : ''}`}>▾</span>
+          </button>
+          {showBudgetSection && (
+            <div className="px-4 pb-4 space-y-3 border-t border-mpp-border">
+              <p className="text-[11px] text-muted-foreground mt-3">
+                Set infrastructure-level spending limits. Circuit breakers trip automatically when limits are exceeded — no more runaway agent bills.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <Field label="Budget Limit (USD)" hint="Max total session spend. Leave empty for unlimited.">
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    value={budgetLimitUsd}
+                    onChange={(e) => setBudgetLimitUsd(e.target.value)}
+                    placeholder="e.g. 10.00"
+                    className="w-full bg-mpp-bg border border-mpp-border rounded px-3 py-2 text-sm text-foreground font-mono focus:outline-none focus:border-mpp-amber/50 transition-colors"
+                  />
+                </Field>
+                <Field label="Velocity Limit (USD/hr)" hint="Max spend per hour. Leave empty for unlimited.">
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    value={velocityLimitUsd}
+                    onChange={(e) => setVelocityLimitUsd(e.target.value)}
+                    placeholder="e.g. 1.00"
+                    className="w-full bg-mpp-bg border border-mpp-border rounded px-3 py-2 text-sm text-foreground font-mono focus:outline-none focus:border-mpp-amber/50 transition-colors"
+                  />
+                </Field>
+              </div>
+              <Field label={`Alert Threshold: ${alertThresholdPercent}%`} hint="Warn when this percentage of budget is consumed.">
+                <input
+                  type="range"
+                  min={10}
+                  max={100}
+                  step={5}
+                  value={alertThresholdPercent}
+                  onChange={(e) => setAlertThresholdPercent(Number(e.target.value))}
+                  className="w-full accent-mpp-amber"
+                />
+              </Field>
+            </div>
+          )}
+        </div>
+
         <div className="rounded p-3 border-l-2 border-mpp-amber/60 bg-mpp-amber/5 flex gap-2">
           <AlertCircle className="w-4 h-4 text-mpp-amber flex-shrink-0 mt-0.5" />
           <p className="text-xs text-muted-foreground leading-relaxed">
@@ -690,6 +768,30 @@ function SessionDetailView({
   onRemove: () => void;
 }) {
   const [showKey, setShowKey] = useState(false);
+  const [editingBudget, setEditingBudget] = useState(false);
+  const [newBudgetLimit, setNewBudgetLimit] = useState("");
+  const [newVelocityLimit, setNewVelocityLimit] = useState("");
+
+  const resetCircuitBreaker = useMutation({
+    mutationFn: () =>
+      api.post(`/api/agent/sessions/${stored.sessionId}/circuit-breaker/reset`),
+    onSuccess: () => {
+      toast.success("Circuit breaker reset");
+      onRefresh();
+    },
+    onError: () => toast.error("Failed to reset circuit breaker"),
+  });
+
+  const updateBudget = useMutation({
+    mutationFn: (data: { budgetLimitUsd?: number | null; velocityLimitUsd?: number | null }) =>
+      api.patch(`/api/agent/sessions/${stored.sessionId}/budget`, data),
+    onSuccess: () => {
+      toast.success("Budget updated");
+      setEditingBudget(false);
+      onRefresh();
+    },
+    onError: () => toast.error("Failed to update budget"),
+  });
 
   const session = detail?.session;
 
@@ -787,7 +889,7 @@ function SessionDetailView({
           />
         </div>
 
-        {/* Custody disclosure — replaces the fake budget progress bar */}
+        {/* Custody disclosure */}
         <div className="mt-4 rounded p-3 border-l-2 border-mpp-success/60 bg-mpp-success/5 flex gap-2">
           <ShieldCheck className="w-4 h-4 text-mpp-success flex-shrink-0 mt-0.5" />
           <p className="text-[11px] text-muted-foreground leading-relaxed">
@@ -795,6 +897,214 @@ function SessionDetailView({
             MPP32 never holds your funds. Paid services are settled by your own wallet via x402 (USDC on Solana) or Tempo (pathUSD on Eth&nbsp;L2). Settled volume above counts only payments verified on-chain by the facilitator.
           </p>
         </div>
+
+        {/* Circuit Breaker / Budget Status Card */}
+        {session && (
+          <div className="mt-4">
+            {session.circuitBreakerTripped && (
+              <div className="rounded p-4 border border-mpp-danger/40 bg-mpp-danger/10 mb-4">
+                <div className="flex items-start justify-between">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="w-5 h-5 text-mpp-danger flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-semibold text-mpp-danger">Circuit Breaker Tripped</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {session.circuitBreakerReason === 'VELOCITY_EXCEEDED'
+                          ? 'Hourly velocity limit exceeded. Spending is paused.'
+                          : 'Session budget exhausted. All paid calls are blocked.'}
+                      </p>
+                      {session.circuitBreakerTrippedAt && (
+                        <p className="text-[10px] text-muted-foreground/70 mt-1">
+                          Tripped: {new Date(session.circuitBreakerTrippedAt).toLocaleString()}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => resetCircuitBreaker.mutate()}
+                    disabled={resetCircuitBreaker.isPending}
+                    className="px-3 py-1.5 rounded text-xs font-semibold bg-mpp-danger/20 border border-mpp-danger/40 text-mpp-danger hover:bg-mpp-danger/30 transition-colors disabled:opacity-50 flex items-center gap-1.5 whitespace-nowrap"
+                  >
+                    {resetCircuitBreaker.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+                    Reset
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {session.budgetLimitUsd != null ? (
+              <div className="card-surface-2 rounded p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="font-mono text-[10px] text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                    <ShieldCheck className="w-3 h-3" />
+                    Spending Guardrails
+                  </span>
+                  <button
+                    onClick={() => {
+                      setEditingBudget(!editingBudget);
+                      setNewBudgetLimit(session.budgetLimitUsd?.toString() ?? "");
+                      setNewVelocityLimit(session.velocityLimitUsd?.toString() ?? "");
+                    }}
+                    className="text-[10px] text-mpp-amber hover:text-mpp-amber-bright transition-colors font-mono"
+                  >
+                    {editingBudget ? "Cancel" : "Edit"}
+                  </button>
+                </div>
+
+                {/* Budget utilization bar */}
+                <div className="mb-3">
+                  <div className="flex items-baseline justify-between mb-1">
+                    <span className="text-xs text-foreground font-mono">
+                      ${session.totalSpentUsd.toFixed(4)} <span className="text-muted-foreground">of</span> ${session.budgetLimitUsd.toFixed(4)}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground font-mono">
+                      {session.budgetUtilizationPercent?.toFixed(1) ?? '0'}% used
+                    </span>
+                  </div>
+                  <div className="w-full h-2 bg-mpp-bg rounded-full overflow-hidden border border-mpp-border">
+                    <div
+                      className={cn(
+                        "h-full rounded-full transition-all",
+                        (session.budgetUtilizationPercent ?? 0) >= 80 ? "bg-mpp-danger" :
+                        (session.budgetUtilizationPercent ?? 0) >= 60 ? "bg-mpp-amber" :
+                        "bg-mpp-success"
+                      )}
+                      style={{ width: `${Math.min(100, session.budgetUtilizationPercent ?? 0)}%` }}
+                    />
+                  </div>
+                  <div className="flex justify-between mt-1">
+                    <span className="text-[10px] text-muted-foreground font-mono">
+                      ${session.remainingBudgetUsd?.toFixed(4) ?? '0'} remaining
+                    </span>
+                    {session.alertThresholdPercent != null && (
+                      <span className="text-[10px] text-muted-foreground/60 font-mono">
+                        Alert at {session.alertThresholdPercent}%
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Velocity */}
+                {session.velocityLimitUsd != null && (
+                  <div className="pt-2 border-t border-mpp-border">
+                    <div className="flex items-baseline justify-between mb-1">
+                      <span className="text-[11px] text-muted-foreground font-mono">Velocity</span>
+                      <span className="text-xs text-foreground font-mono">
+                        ${session.hourlySpendUsd.toFixed(4)} <span className="text-muted-foreground">/ ${session.velocityLimitUsd.toFixed(4)}/hr</span>
+                      </span>
+                    </div>
+                    <div className="w-full h-1.5 bg-mpp-bg rounded-full overflow-hidden border border-mpp-border">
+                      <div
+                        className={cn(
+                          "h-full rounded-full transition-all",
+                          session.velocityLimitUsd > 0 && (session.hourlySpendUsd / session.velocityLimitUsd) >= 0.8
+                            ? "bg-mpp-danger" : "bg-mpp-amber"
+                        )}
+                        style={{ width: `${Math.min(100, session.velocityLimitUsd > 0 ? (session.hourlySpendUsd / session.velocityLimitUsd) * 100 : 0)}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Inline budget editor */}
+                {editingBudget && (
+                  <div className="mt-3 pt-3 border-t border-mpp-border space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">Budget (USD)</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0.01"
+                          value={newBudgetLimit}
+                          onChange={(e) => setNewBudgetLimit(e.target.value)}
+                          className="w-full mt-1 bg-mpp-bg border border-mpp-border rounded px-2 py-1.5 text-xs text-foreground font-mono focus:outline-none focus:border-mpp-amber/50"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">Velocity (USD/hr)</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0.01"
+                          value={newVelocityLimit}
+                          onChange={(e) => setNewVelocityLimit(e.target.value)}
+                          className="w-full mt-1 bg-mpp-bg border border-mpp-border rounded px-2 py-1.5 text-xs text-foreground font-mono focus:outline-none focus:border-mpp-amber/50"
+                        />
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => updateBudget.mutate({
+                        budgetLimitUsd: newBudgetLimit ? parseFloat(newBudgetLimit) : null,
+                        velocityLimitUsd: newVelocityLimit ? parseFloat(newVelocityLimit) : null,
+                      })}
+                      disabled={updateBudget.isPending}
+                      className="btn-amber px-3 py-1.5 rounded text-xs font-semibold disabled:opacity-50 flex items-center gap-1.5"
+                    >
+                      {updateBudget.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+                      Save
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="rounded p-3 border border-dashed border-mpp-border bg-mpp-surface/30">
+                <p className="text-[11px] text-muted-foreground text-center">
+                  No spending limits configured. <button onClick={() => setEditingBudget(true)} className="text-mpp-amber hover:text-mpp-amber-bright underline-offset-2 hover:underline font-mono">Set up guardrails</button> to prevent runaway spending.
+                </p>
+                {editingBudget && (
+                  <div className="mt-3 pt-3 border-t border-mpp-border space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">Budget (USD)</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0.01"
+                          value={newBudgetLimit}
+                          onChange={(e) => setNewBudgetLimit(e.target.value)}
+                          placeholder="e.g. 10.00"
+                          className="w-full mt-1 bg-mpp-bg border border-mpp-border rounded px-2 py-1.5 text-xs text-foreground font-mono focus:outline-none focus:border-mpp-amber/50"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">Velocity (USD/hr)</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0.01"
+                          value={newVelocityLimit}
+                          onChange={(e) => setNewVelocityLimit(e.target.value)}
+                          placeholder="e.g. 1.00"
+                          className="w-full mt-1 bg-mpp-bg border border-mpp-border rounded px-2 py-1.5 text-xs text-foreground font-mono focus:outline-none focus:border-mpp-amber/50"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => updateBudget.mutate({
+                          budgetLimitUsd: newBudgetLimit ? parseFloat(newBudgetLimit) : null,
+                          velocityLimitUsd: newVelocityLimit ? parseFloat(newVelocityLimit) : null,
+                        })}
+                        disabled={updateBudget.isPending || (!newBudgetLimit && !newVelocityLimit)}
+                        className="btn-amber px-3 py-1.5 rounded text-xs font-semibold disabled:opacity-50 flex items-center gap-1.5"
+                      >
+                        {updateBudget.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+                        Save
+                      </button>
+                      <button
+                        onClick={() => setEditingBudget(false)}
+                        className="px-3 py-1.5 rounded text-xs text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Wallet info — honest about verification state */}
         {stored.walletAddress && (

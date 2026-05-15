@@ -11,6 +11,7 @@ import {
   type ProtocolId,
 } from '../lib/agent-router.js'
 import { getM32Balance, calculateDiscount, type DiscountResult } from '../lib/solana-token.js'
+import { M32_EXCLUSIVE_APIS } from '../lib/m32-gate.js'
 import { checkUrlForSsrf } from '../lib/ssrf.js'
 import { env } from '../env.js'
 
@@ -21,6 +22,15 @@ const CreateSessionSchema = z.object({
   agentName: z.string().max(100).optional(),
   walletAddress: z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/).optional(),
   preferredProtocol: z.enum(['tempo', 'x402', 'acp', 'ap2', 'agtp']).optional(),
+  budgetLimitUsd: z.number().positive().max(1_000_000).optional(),
+  velocityLimitUsd: z.number().positive().max(1_000_000).optional(),
+  alertThresholdPercent: z.number().int().min(1).max(100).optional(),
+})
+
+const UpdateBudgetSchema = z.object({
+  budgetLimitUsd: z.number().positive().max(1_000_000).nullable().optional(),
+  velocityLimitUsd: z.number().positive().max(1_000_000).nullable().optional(),
+  alertThresholdPercent: z.number().int().min(1).max(100).nullable().optional(),
 })
 
 const QuoteRequestSchema = z.object({
@@ -110,7 +120,7 @@ agentRouter.post('/sessions', async (c) => {
     return c.json({ error: { message: 'Invalid request', code: 'VALIDATION_ERROR', fields: parsed.error.flatten().fieldErrors } }, 400)
   }
 
-  const { agentId, agentName, walletAddress, preferredProtocol } = parsed.data
+  const { agentId, agentName, walletAddress, preferredProtocol, budgetLimitUsd, velocityLimitUsd, alertThresholdPercent } = parsed.data
 
   // Plaintext API key is returned to the caller exactly once and never stored.
   // We persist only the sha256 hash so a database leak does not yield live keys.
@@ -126,6 +136,9 @@ agentRouter.post('/sessions', async (c) => {
       preferredProtocol: preferredProtocol ?? null,
       apiKey: apiKeyHash,
       expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      budgetLimitUsd: budgetLimitUsd ?? null,
+      velocityLimitUsd: velocityLimitUsd ?? null,
+      alertThresholdPercent: alertThresholdPercent ?? null,
     },
   })
 
@@ -159,6 +172,9 @@ agentRouter.post('/sessions', async (c) => {
       expiresAt: session.expiresAt?.toISOString(),
       protocols: getEnabledProtocols(),
       usage: `Include header: X-Agent-Key: ${apiKey}`,
+      budgetLimitUsd: session.budgetLimitUsd,
+      velocityLimitUsd: session.velocityLimitUsd,
+      alertThresholdPercent: session.alertThresholdPercent,
       custodyDisclosure:
         'MPP32 never holds custody of your funds. Paid services are settled by your own wallet via x402 (Solana USDC). MPP32 verifies and forwards — it never spends on your behalf.',
     },
@@ -214,6 +230,14 @@ agentRouter.get('/sessions/:id', async (c) => {
     where: { sessionId: id, createdAt: { gte: oneHourAgo } },
   })
 
+  const totalSpentUsd = settledVolume._sum.priceSettled ?? 0
+
+  const hourlySpendAgg = await prisma.agentTransaction.aggregate({
+    where: { sessionId: id, settled: true, createdAt: { gte: oneHourAgo } },
+    _sum: { priceSettled: true },
+  })
+  const hourlySpendUsd = hourlySpendAgg._sum.priceSettled ?? 0
+
   return c.json({
     data: {
       session: {
@@ -231,11 +255,23 @@ agentRouter.get('/sessions/:id', async (c) => {
         callsLastHour,
         rateLimit: { max: 240, windowMs: 60_000 },
         settledCalls: settledCount,
-        settledVolumeUsd: settledVolume._sum.priceSettled ?? 0,
+        settledVolumeUsd: totalSpentUsd,
         isActive: session.isActive,
         lastActivityAt: session.lastActivityAt?.toISOString(),
         expiresAt: session.expiresAt?.toISOString(),
         createdAt: session.createdAt.toISOString(),
+        budgetLimitUsd: session.budgetLimitUsd,
+        velocityLimitUsd: session.velocityLimitUsd,
+        alertThresholdPercent: session.alertThresholdPercent,
+        totalSpentUsd,
+        remainingBudgetUsd: session.budgetLimitUsd != null ? Math.max(0, session.budgetLimitUsd - totalSpentUsd) : null,
+        hourlySpendUsd,
+        circuitBreakerTripped: session.circuitBreakerTripped,
+        circuitBreakerReason: session.circuitBreakerReason,
+        circuitBreakerTrippedAt: session.circuitBreakerTrippedAt?.toISOString() ?? null,
+        budgetUtilizationPercent: session.budgetLimitUsd != null && session.budgetLimitUsd > 0
+          ? Number(((totalSpentUsd / session.budgetLimitUsd) * 100).toFixed(1))
+          : null,
       },
       protocolBreakdown: protocolBreakdown.map((p) => ({
         protocol: p.protocolUsed,
@@ -324,6 +360,89 @@ agentRouter.post('/execute', rateLimitByKey({ name: 'agent-execute', max: 120, w
   if (session.expiresAt && session.expiresAt < new Date()) {
     await prisma.agentSession.update({ where: { id: session.id }, data: { isActive: false } })
     return c.json(mpp32AuthEnvelope('MPP32 session expired. Renew via POST /api/agent/sessions.', 'MPP32_SESSION_EXPIRED'), 401)
+  }
+
+  // ── Circuit breaker enforcement ──────────────────────────────────────────
+  const hasBudgetLimits = session.budgetLimitUsd != null || session.velocityLimitUsd != null || session.circuitBreakerTripped
+  let budgetTotalSpent = 0
+  let budgetHourlySpend = 0
+
+  if (hasBudgetLimits) {
+    if (session.circuitBreakerTripped) {
+      return c.json({
+        error: {
+          message: `Circuit breaker tripped: ${session.circuitBreakerReason === 'VELOCITY_EXCEEDED' ? 'hourly velocity limit exceeded' : 'session budget exhausted'}.`,
+          code: 'MPP32_CIRCUIT_BREAKER_TRIPPED',
+          authScope: 'mpp32_session',
+          doNotPromptForProviderApiKey: true,
+          budgetStatus: {
+            budgetLimitUsd: session.budgetLimitUsd,
+            velocityLimitUsd: session.velocityLimitUsd,
+            circuitBreakerReason: session.circuitBreakerReason,
+            circuitBreakerTrippedAt: session.circuitBreakerTrippedAt?.toISOString() ?? null,
+          },
+          remedy: 'Reset the circuit breaker: POST /api/agent/circuit-breaker/reset (with X-Agent-Key header), or increase the budget: PATCH /api/agent/budget. If using the MCP server, call the manage_agent_budget tool with action="reset".',
+        },
+      }, 429)
+    }
+
+    const spendAgg = await prisma.agentTransaction.aggregate({
+      where: { sessionId: session.id, settled: true },
+      _sum: { priceSettled: true },
+    })
+    budgetTotalSpent = spendAgg._sum.priceSettled ?? 0
+
+    if (session.budgetLimitUsd != null && budgetTotalSpent >= session.budgetLimitUsd) {
+      await prisma.agentSession.update({
+        where: { id: session.id },
+        data: { circuitBreakerTripped: true, circuitBreakerReason: 'BUDGET_EXHAUSTED', circuitBreakerTrippedAt: new Date() },
+      })
+      return c.json({
+        error: {
+          message: `Session budget exhausted. $${budgetTotalSpent.toFixed(4)} spent of $${session.budgetLimitUsd.toFixed(4)} budget.`,
+          code: 'MPP32_CIRCUIT_BREAKER_TRIPPED',
+          authScope: 'mpp32_session',
+          doNotPromptForProviderApiKey: true,
+          budgetStatus: {
+            budgetLimitUsd: session.budgetLimitUsd,
+            totalSpentUsd: budgetTotalSpent,
+            remainingUsd: 0,
+            circuitBreakerReason: 'BUDGET_EXHAUSTED',
+          },
+          remedy: 'Increase budget via PATCH /api/agent/budget or reset via POST /api/agent/circuit-breaker/reset. MCP users: call manage_agent_budget with action="set" or action="reset".',
+        },
+      }, 429)
+    }
+
+    if (session.velocityLimitUsd != null) {
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000)
+      const hourlyAgg = await prisma.agentTransaction.aggregate({
+        where: { sessionId: session.id, settled: true, createdAt: { gte: oneHourAgo } },
+        _sum: { priceSettled: true },
+      })
+      budgetHourlySpend = hourlyAgg._sum.priceSettled ?? 0
+
+      if (budgetHourlySpend >= session.velocityLimitUsd) {
+        await prisma.agentSession.update({
+          where: { id: session.id },
+          data: { circuitBreakerTripped: true, circuitBreakerReason: 'VELOCITY_EXCEEDED', circuitBreakerTrippedAt: new Date() },
+        })
+        return c.json({
+          error: {
+            message: `Hourly velocity limit exceeded. $${budgetHourlySpend.toFixed(4)} spent this hour vs $${session.velocityLimitUsd.toFixed(4)}/hr limit.`,
+            code: 'MPP32_CIRCUIT_BREAKER_TRIPPED',
+            authScope: 'mpp32_session',
+            doNotPromptForProviderApiKey: true,
+            budgetStatus: {
+              velocityLimitUsd: session.velocityLimitUsd,
+              hourlySpendUsd: budgetHourlySpend,
+              circuitBreakerReason: 'VELOCITY_EXCEEDED',
+            },
+            remedy: 'Wait for the velocity window to reset, or reset via POST /api/agent/circuit-breaker/reset. MCP users: call manage_agent_budget with action="reset".',
+          },
+        }, 429)
+      }
+    }
   }
 
   const body = await c.req.json().catch(() => null)
@@ -642,6 +761,30 @@ agentRouter.post('/execute', rateLimitByKey({ name: 'agent-execute', max: 120, w
   if (txEscrowStatus) c.header('X-Escrow-Status', txEscrowStatus)
   if (txEscrowSkipReason) c.header('X-Escrow-Skip-Reason', txEscrowSkipReason)
 
+  // Budget tracking headers
+  if (session.budgetLimitUsd != null) {
+    const newTotalSpent = budgetTotalSpent + priceSettled
+    c.header('X-Budget-Spent', newTotalSpent.toFixed(6))
+    c.header('X-Budget-Remaining', Math.max(0, session.budgetLimitUsd - newTotalSpent).toFixed(6))
+    if (session.alertThresholdPercent != null && session.budgetLimitUsd > 0) {
+      const utilization = (newTotalSpent / session.budgetLimitUsd) * 100
+      if (utilization >= session.alertThresholdPercent) {
+        c.header('X-Budget-Warning', `THRESHOLD_REACHED (${utilization.toFixed(1)}% of budget used)`)
+      }
+    }
+  }
+
+  const budgetMeta = session.budgetLimitUsd != null || session.velocityLimitUsd != null ? {
+    budgetLimitUsd: session.budgetLimitUsd,
+    velocityLimitUsd: session.velocityLimitUsd,
+    totalSpentUsd: budgetTotalSpent + priceSettled,
+    remainingBudgetUsd: session.budgetLimitUsd != null ? Math.max(0, session.budgetLimitUsd - budgetTotalSpent - priceSettled) : null,
+    hourlySpendUsd: budgetHourlySpend + priceSettled,
+    budgetUtilizationPercent: session.budgetLimitUsd != null && session.budgetLimitUsd > 0
+      ? Number((((budgetTotalSpent + priceSettled) / session.budgetLimitUsd) * 100).toFixed(1))
+      : null,
+  } : undefined
+
   return c.json({
     data: {
       result,
@@ -674,6 +817,7 @@ agentRouter.post('/execute', rateLimitByKey({ name: 'agent-execute', max: 120, w
               ? 'Payment was NOT settled — upstream response failed quality checks. Your wallet was not charged.'
               : 'Escrow settlement was attempted but failed. Contact support if funds were deducted.',
         } : null,
+        budget: budgetMeta ?? null,
       },
     },
   })
@@ -792,12 +936,28 @@ agentRouter.get('/services', async (c) => {
     })
   }
 
+  const m32Services = M32_EXCLUSIVE_APIS.map((api) => ({
+    slug: api.id,
+    source: 'm32-exclusive',
+    name: api.name,
+    description: api.description,
+    category: 'm32-exclusive',
+    basePrice: 0,
+    effectivePrice: 0,
+    verified: true,
+    popularity: 0,
+    protocols: ['m32-gate'],
+    m32Required: api.requiredM32,
+    endpoint: api.endpoint,
+    note: `Free for holders of ${api.requiredM32.toLocaleString()}+ M32 tokens. Returns 403 for non-holders.`,
+  }))
+
   const externalTruncated = includeExternal && externalTotalAvailable > externalServices.length
   return c.json({
     data: {
-      services: [...nativeServices, ...externalServices],
-      total: nativeServices.length + externalServices.length,
-      counts: { native: nativeServices.length, external: externalServices.length },
+      services: [...m32Services, ...nativeServices, ...externalServices],
+      total: m32Services.length + nativeServices.length + externalServices.length,
+      counts: { m32Exclusive: m32Services.length, native: nativeServices.length, external: externalServices.length },
       totalAvailable: {
         native: nativeServices.length,
         external: externalTotalAvailable,
@@ -881,6 +1041,260 @@ agentRouter.get('/find', async (c) => {
       total: native.length + external.length,
     },
   })
+})
+
+// ── Budget management endpoints (authenticated by X-Agent-Key) ─────────────
+
+async function resolveSessionByKey(c: any): Promise<{ session: any; error?: undefined } | { session?: undefined; error: Response }> {
+  const agentKey = c.req.header('x-agent-key')
+  if (!agentKey) {
+    return { error: c.json({ error: { message: 'X-Agent-Key header required', code: 'MPP32_SESSION_REQUIRED' } }, 401) }
+  }
+  const agentKeyHash = createHash('sha256').update(agentKey).digest('hex')
+  const session = await prisma.agentSession.findUnique({ where: { apiKey: agentKeyHash } })
+  if (!session || !session.isActive) {
+    return { error: c.json({ error: { message: 'Session not found or inactive', code: 'MPP32_SESSION_INVALID' } }, 401) }
+  }
+  return { session }
+}
+
+// PATCH /budget — update budget settings on the authenticated session
+agentRouter.patch('/budget', async (c) => {
+  const resolved = await resolveSessionByKey(c)
+  if (resolved.error) return resolved.error
+  const session = resolved.session!
+
+  const body = await c.req.json().catch(() => null)
+  const parsed = UpdateBudgetSchema.safeParse(body)
+  if (!parsed.success) {
+    return c.json({ error: { message: 'Invalid request', code: 'VALIDATION_ERROR', fields: parsed.error.flatten().fieldErrors } }, 400)
+  }
+
+  const updateData: Record<string, unknown> = {}
+  if (parsed.data.budgetLimitUsd !== undefined) updateData.budgetLimitUsd = parsed.data.budgetLimitUsd
+  if (parsed.data.velocityLimitUsd !== undefined) updateData.velocityLimitUsd = parsed.data.velocityLimitUsd
+  if (parsed.data.alertThresholdPercent !== undefined) updateData.alertThresholdPercent = parsed.data.alertThresholdPercent
+
+  if (Object.keys(updateData).length === 0) {
+    return c.json({ error: { message: 'No fields to update', code: 'VALIDATION_ERROR' } }, 400)
+  }
+
+  // Auto-reset circuit breaker if budget is being increased past current spend
+  if (
+    session.circuitBreakerTripped &&
+    session.circuitBreakerReason === 'BUDGET_EXHAUSTED' &&
+    typeof parsed.data.budgetLimitUsd === 'number'
+  ) {
+    const spendAgg = await prisma.agentTransaction.aggregate({
+      where: { sessionId: session.id, settled: true },
+      _sum: { priceSettled: true },
+    })
+    const totalSpent = spendAgg._sum.priceSettled ?? 0
+    if (parsed.data.budgetLimitUsd > totalSpent) {
+      updateData.circuitBreakerTripped = false
+      updateData.circuitBreakerReason = null
+      updateData.circuitBreakerTrippedAt = null
+    }
+  }
+
+  const updated = await prisma.agentSession.update({
+    where: { id: session.id },
+    data: updateData,
+  })
+
+  const spendAgg = await prisma.agentTransaction.aggregate({
+    where: { sessionId: session.id, settled: true },
+    _sum: { priceSettled: true },
+  })
+  const totalSpent = spendAgg._sum.priceSettled ?? 0
+
+  return c.json({
+    data: {
+      sessionId: updated.id,
+      budgetLimitUsd: updated.budgetLimitUsd,
+      velocityLimitUsd: updated.velocityLimitUsd,
+      alertThresholdPercent: updated.alertThresholdPercent,
+      totalSpentUsd: totalSpent,
+      remainingBudgetUsd: updated.budgetLimitUsd != null ? Math.max(0, updated.budgetLimitUsd - totalSpent) : null,
+      circuitBreakerTripped: updated.circuitBreakerTripped,
+      circuitBreakerReason: updated.circuitBreakerReason,
+      message: updated.circuitBreakerTripped ? 'Budget updated. Circuit breaker is still tripped.' : 'Budget updated successfully.',
+    },
+  })
+})
+
+// POST /circuit-breaker/reset — manually reset a tripped circuit breaker
+agentRouter.post('/circuit-breaker/reset', async (c) => {
+  const resolved = await resolveSessionByKey(c)
+  if (resolved.error) return resolved.error
+  const session = resolved.session!
+
+  if (!session.circuitBreakerTripped) {
+    return c.json({
+      data: {
+        sessionId: session.id,
+        circuitBreakerTripped: false,
+        message: 'Circuit breaker was not tripped. No action needed.',
+      },
+    })
+  }
+
+  await prisma.agentSession.update({
+    where: { id: session.id },
+    data: { circuitBreakerTripped: false, circuitBreakerReason: null, circuitBreakerTrippedAt: null },
+  })
+
+  const spendAgg = await prisma.agentTransaction.aggregate({
+    where: { sessionId: session.id, settled: true },
+    _sum: { priceSettled: true },
+  })
+  const totalSpent = spendAgg._sum.priceSettled ?? 0
+
+  return c.json({
+    data: {
+      sessionId: session.id,
+      circuitBreakerTripped: false,
+      previousReason: session.circuitBreakerReason,
+      budgetLimitUsd: session.budgetLimitUsd,
+      totalSpentUsd: totalSpent,
+      remainingBudgetUsd: session.budgetLimitUsd != null ? Math.max(0, session.budgetLimitUsd - totalSpent) : null,
+      message: 'Circuit breaker reset. Session can resume spending.',
+    },
+  })
+})
+
+// GET /spending — detailed spending analytics for the authenticated session
+agentRouter.get('/spending', async (c) => {
+  const resolved = await resolveSessionByKey(c)
+  if (resolved.error) return resolved.error
+  const session = resolved.session!
+
+  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000)
+
+  const [totalAgg, hourlyAgg, byService, byProtocol] = await Promise.all([
+    prisma.agentTransaction.aggregate({
+      where: { sessionId: session.id, settled: true },
+      _sum: { priceSettled: true },
+      _count: true,
+    }),
+    prisma.agentTransaction.aggregate({
+      where: { sessionId: session.id, settled: true, createdAt: { gte: oneHourAgo } },
+      _sum: { priceSettled: true },
+      _count: true,
+    }),
+    prisma.agentTransaction.groupBy({
+      by: ['service'],
+      where: { sessionId: session.id, settled: true },
+      _sum: { priceSettled: true },
+      _count: true,
+      orderBy: { _sum: { priceSettled: 'desc' } },
+    }),
+    prisma.agentTransaction.groupBy({
+      by: ['protocolUsed'],
+      where: { sessionId: session.id, settled: true },
+      _sum: { priceSettled: true },
+      _count: true,
+    }),
+  ])
+
+  const totalSpent = totalAgg._sum.priceSettled ?? 0
+  const hourlySpend = hourlyAgg._sum.priceSettled ?? 0
+
+  return c.json({
+    data: {
+      sessionId: session.id,
+      budgetLimitUsd: session.budgetLimitUsd,
+      velocityLimitUsd: session.velocityLimitUsd,
+      alertThresholdPercent: session.alertThresholdPercent,
+      totalSpentUsd: totalSpent,
+      totalSettledCalls: totalAgg._count,
+      remainingBudgetUsd: session.budgetLimitUsd != null ? Math.max(0, session.budgetLimitUsd - totalSpent) : null,
+      budgetUtilizationPercent: session.budgetLimitUsd != null && session.budgetLimitUsd > 0
+        ? Number(((totalSpent / session.budgetLimitUsd) * 100).toFixed(1))
+        : null,
+      hourlySpendUsd: hourlySpend,
+      hourlySettledCalls: hourlyAgg._count,
+      circuitBreakerTripped: session.circuitBreakerTripped,
+      circuitBreakerReason: session.circuitBreakerReason,
+      circuitBreakerTrippedAt: session.circuitBreakerTrippedAt?.toISOString() ?? null,
+      byService: byService.map((s) => ({
+        service: s.service,
+        totalSpentUsd: s._sum.priceSettled ?? 0,
+        count: s._count,
+      })),
+      byProtocol: byProtocol.map((p) => ({
+        protocol: p.protocolUsed,
+        totalSpentUsd: p._sum.priceSettled ?? 0,
+        count: p._count,
+      })),
+    },
+  })
+})
+
+// ── Session-ID-based budget routes (for frontend) ──────────────────────────
+
+agentRouter.patch('/sessions/:id/budget', async (c) => {
+  const id = c.req.param('id')
+  const session = await prisma.agentSession.findUnique({ where: { id } })
+  if (!session) return c.json({ error: { message: 'Session not found', code: 'NOT_FOUND' } }, 404)
+
+  const body = await c.req.json().catch(() => null)
+  const parsed = UpdateBudgetSchema.safeParse(body)
+  if (!parsed.success) {
+    return c.json({ error: { message: 'Invalid request', code: 'VALIDATION_ERROR', fields: parsed.error.flatten().fieldErrors } }, 400)
+  }
+
+  const updateData: Record<string, unknown> = {}
+  if (parsed.data.budgetLimitUsd !== undefined) updateData.budgetLimitUsd = parsed.data.budgetLimitUsd
+  if (parsed.data.velocityLimitUsd !== undefined) updateData.velocityLimitUsd = parsed.data.velocityLimitUsd
+  if (parsed.data.alertThresholdPercent !== undefined) updateData.alertThresholdPercent = parsed.data.alertThresholdPercent
+
+  if (Object.keys(updateData).length === 0) {
+    return c.json({ error: { message: 'No fields to update', code: 'VALIDATION_ERROR' } }, 400)
+  }
+
+  if (session.circuitBreakerTripped && session.circuitBreakerReason === 'BUDGET_EXHAUSTED' && typeof parsed.data.budgetLimitUsd === 'number') {
+    const spendAgg = await prisma.agentTransaction.aggregate({ where: { sessionId: session.id, settled: true }, _sum: { priceSettled: true } })
+    if (parsed.data.budgetLimitUsd > (spendAgg._sum.priceSettled ?? 0)) {
+      updateData.circuitBreakerTripped = false
+      updateData.circuitBreakerReason = null
+      updateData.circuitBreakerTrippedAt = null
+    }
+  }
+
+  const updated = await prisma.agentSession.update({ where: { id: session.id }, data: updateData })
+  const spendAgg = await prisma.agentTransaction.aggregate({ where: { sessionId: session.id, settled: true }, _sum: { priceSettled: true } })
+  const totalSpent = spendAgg._sum.priceSettled ?? 0
+
+  return c.json({
+    data: {
+      sessionId: updated.id,
+      budgetLimitUsd: updated.budgetLimitUsd,
+      velocityLimitUsd: updated.velocityLimitUsd,
+      alertThresholdPercent: updated.alertThresholdPercent,
+      totalSpentUsd: totalSpent,
+      remainingBudgetUsd: updated.budgetLimitUsd != null ? Math.max(0, updated.budgetLimitUsd - totalSpent) : null,
+      circuitBreakerTripped: updated.circuitBreakerTripped,
+      message: updated.circuitBreakerTripped ? 'Budget updated. Circuit breaker is still tripped.' : 'Budget updated successfully.',
+    },
+  })
+})
+
+agentRouter.post('/sessions/:id/circuit-breaker/reset', async (c) => {
+  const id = c.req.param('id')
+  const session = await prisma.agentSession.findUnique({ where: { id } })
+  if (!session) return c.json({ error: { message: 'Session not found', code: 'NOT_FOUND' } }, 404)
+
+  if (!session.circuitBreakerTripped) {
+    return c.json({ data: { sessionId: session.id, circuitBreakerTripped: false, message: 'Circuit breaker was not tripped.' } })
+  }
+
+  await prisma.agentSession.update({
+    where: { id: session.id },
+    data: { circuitBreakerTripped: false, circuitBreakerReason: null, circuitBreakerTrippedAt: null },
+  })
+
+  return c.json({ data: { sessionId: session.id, circuitBreakerTripped: false, message: 'Circuit breaker reset. Session can resume spending.' } })
 })
 
 // GET /stats — aggregate platform stats. Volume = SETTLED on-chain only.

@@ -9,6 +9,7 @@ import { contactRouter } from "./routes/contact";
 import { checkoutRouter } from "./routes/checkout";
 import { agentRouter } from "./routes/agent";
 import { catalogRouter } from "./routes/catalog";
+import { m32Router } from "./routes/m32-apis";
 import { logger as honoLogger } from "hono/logger";
 import { prisma } from "./lib/db.js";
 import { isX402Enabled, SOLANA_NETWORK, USDC_MINT } from "./lib/x402.js";
@@ -220,6 +221,101 @@ async function openApiHandler(c: any) {
         },
       },
       ...proxyPaths,
+      "/api/m32/info": {
+        get: {
+          operationId: "m32-exclusive-apis-info",
+          summary: "List M32-Exclusive APIs",
+          description: "Returns details on all M32 token-gated exclusive APIs including required token balances, descriptions, and endpoints. No authentication required.",
+          tags: ["m32", "exclusive"],
+          responses: {
+            "200": { description: "List of M32-exclusive APIs with requirements" },
+          },
+        },
+      },
+      "/api/m32/whale-tracker": {
+        post: {
+          operationId: "m32-whale-tracker",
+          summary: "Whale Tracker (M32-Gated)",
+          description: "Analyzes top 20 holders of any Solana token: concentration risk, buy/sell pressure, holder distribution, and whale dominance metrics. Requires holding 1,000,000+ M32 tokens.",
+          tags: ["m32", "exclusive", "whale", "solana"],
+          "x-m32-gate": { requiredBalance: 1_000_000, header: "X-Wallet-Address" },
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["token"],
+                  properties: {
+                    token: { type: "string", description: "Solana token mint address to analyze" },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": { description: "Whale analysis with top holders, concentration metrics, and buy/sell pressure" },
+            "403": { description: "Insufficient M32 balance — requires 1,000,000+ M32 tokens" },
+            "404": { description: "Token not found or no trading pairs" },
+          },
+        },
+      },
+      "/api/m32/compare": {
+        post: {
+          operationId: "m32-token-compare",
+          summary: "Token Comparison (M32-Gated)",
+          description: "Head-to-head intelligence battle between two Solana tokens. Compares alpha scores, rug risk, whale activity, volume, liquidity, and market data side by side. Requires holding 2,500,000+ M32 tokens.",
+          tags: ["m32", "exclusive", "intelligence", "solana"],
+          "x-m32-gate": { requiredBalance: 2_500_000, header: "X-Wallet-Address" },
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["tokenA", "tokenB"],
+                  properties: {
+                    tokenA: { type: "string", description: "First Solana token mint address" },
+                    tokenB: { type: "string", description: "Second Solana token mint address" },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": { description: "Side-by-side intelligence comparison with winner verdict" },
+            "403": { description: "Insufficient M32 balance — requires 2,500,000+ M32 tokens" },
+            "404": { description: "One or both tokens not found" },
+          },
+        },
+      },
+      "/api/m32/portfolio": {
+        post: {
+          operationId: "m32-portfolio-scanner",
+          summary: "Portfolio Scanner (M32-Gated)",
+          description: "Full wallet scan: discovers all SPL tokens in a Solana wallet, runs intelligence on the top holdings, and returns per-token analysis with portfolio-level risk metrics. Requires holding 5,000,000+ M32 tokens.",
+          tags: ["m32", "exclusive", "portfolio", "solana"],
+          "x-m32-gate": { requiredBalance: 5_000_000, header: "X-Wallet-Address" },
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["wallet"],
+                  properties: {
+                    wallet: { type: "string", description: "Solana wallet address to scan" },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": { description: "Portfolio analysis with per-token intelligence and aggregate risk" },
+            "403": { description: "Insufficient M32 balance — requires 5,000,000+ M32 tokens" },
+          },
+        },
+      },
       "/api/agent/protocols": {
         get: {
           operationId: "agent-protocols",
@@ -416,6 +512,39 @@ app.get("/.well-known/agent.json", (c) => {
           "Check my agent session spending and protocol breakdown",
         ],
       },
+      {
+        id: "m32-whale-tracker",
+        name: "M32 Whale Tracker",
+        description: "Token-gated whale analysis for any Solana token. Returns top 20 holders, concentration risk, holder distribution, and buy/sell pressure. Requires holding 1,000,000+ M32 tokens. Free for qualifying holders.",
+        tags: ["m32", "exclusive", "whale", "solana", "holders", "on-chain"],
+        examples: [
+          "Show me the top holders of BONK",
+          "Analyze whale concentration risk for JUP token",
+          "What is the holder distribution for SOL",
+        ],
+      },
+      {
+        id: "m32-token-compare",
+        name: "M32 Token Comparison",
+        description: "Token-gated head-to-head intelligence battle between two Solana tokens. Side-by-side alpha scores, rug risk, whale activity, volume, liquidity, and market data with a winner verdict. Requires holding 2,500,000+ M32 tokens. Free for qualifying holders.",
+        tags: ["m32", "exclusive", "comparison", "intelligence", "solana"],
+        examples: [
+          "Compare SOL vs BONK intelligence scores",
+          "Which token is safer: JUP or ORCA",
+          "Head to head analysis of two memecoins",
+        ],
+      },
+      {
+        id: "m32-portfolio-scanner",
+        name: "M32 Portfolio Scanner",
+        description: "Token-gated full wallet scan. Discovers all SPL tokens in a Solana wallet, runs intelligence on the top holdings, and returns per-token analysis with aggregate portfolio risk. Requires holding 5,000,000+ M32 tokens. Free for qualifying holders.",
+        tags: ["m32", "exclusive", "portfolio", "wallet", "solana", "risk"],
+        examples: [
+          "Scan my wallet for token risks",
+          "Analyze all holdings in a Solana wallet",
+          "What tokens does this wallet hold and how risky are they",
+        ],
+      },
     ],
     authentication: {
       schemes: ["x402", "tempo", "acp", "ap2", "agtp"],
@@ -571,6 +700,61 @@ app.get("/api/mcp-config", (c) => {
           },
         },
         {
+          name: "get_m32_whale_tracker",
+          description: "M32-gated whale analysis for any Solana token. Returns top 20 holders, concentration risk, holder distribution, and buy/sell pressure. Requires the caller to hold 1,000,000+ M32 tokens (verified on-chain). Free for qualifying holders.",
+          inputSchema: {
+            type: "object",
+            required: ["token", "walletAddress"],
+            properties: {
+              token: { type: "string", description: "Solana token mint address to analyze" },
+              walletAddress: { type: "string", description: "Your Solana wallet address (M32 balance checked on-chain)" },
+            },
+          },
+          annotations: {
+            title: "Whale Tracker (M32 Exclusive)",
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: true,
+          },
+        },
+        {
+          name: "compare_tokens_m32",
+          description: "M32-gated head-to-head intelligence comparison of two Solana tokens. Returns side-by-side alpha scores, rug risk, whale activity, volume, liquidity, market data, and a winner verdict. Requires the caller to hold 2,500,000+ M32 tokens (verified on-chain). Free for qualifying holders.",
+          inputSchema: {
+            type: "object",
+            required: ["tokenA", "tokenB", "walletAddress"],
+            properties: {
+              tokenA: { type: "string", description: "First Solana token mint address" },
+              tokenB: { type: "string", description: "Second Solana token mint address" },
+              walletAddress: { type: "string", description: "Your Solana wallet address (M32 balance checked on-chain)" },
+            },
+          },
+          annotations: {
+            title: "Token Comparison (M32 Exclusive)",
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: true,
+          },
+        },
+        {
+          name: "scan_portfolio_m32",
+          description: "M32-gated full wallet portfolio scan. Discovers all SPL tokens in a Solana wallet, runs intelligence on top holdings, and returns per-token analysis with aggregate portfolio risk. Requires the caller to hold 5,000,000+ M32 tokens (verified on-chain). Free for qualifying holders.",
+          inputSchema: {
+            type: "object",
+            required: ["wallet", "walletAddress"],
+            properties: {
+              wallet: { type: "string", description: "Solana wallet address to scan" },
+              walletAddress: { type: "string", description: "Your Solana wallet address (M32 balance checked on-chain)" },
+            },
+          },
+          annotations: {
+            title: "Portfolio Scanner (M32 Exclusive)",
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: true,
+          },
+        },
+        {
           name: "create_agent_session",
           description: "Create a non-custodial agent session for cross-protocol service discovery and call routing. Returns a rate-limited API key. MPP32 NEVER spends funds on your behalf — every paid call is settled by the caller's own wallet, verified on-chain via the appropriate facilitator (x402 for USDC on Solana, Tempo for pathUSD on L2). Wallet address is recorded for M32 discount tier lookup but ownership is not authenticated until SIWS sign-in (coming soon).",
           inputSchema: {
@@ -615,6 +799,12 @@ app.get("/api/mcp-config", (c) => {
           services: "/api/agent/services",
           stats: "/api/agent/stats",
         },
+        m32Exclusive: {
+          info: "/api/m32/info",
+          whaleTracker: "/api/m32/whale-tracker",
+          compare: "/api/m32/compare",
+          portfolio: "/api/m32/portfolio",
+        },
       },
       install: "npx mpp32-mcp-server",
       package: "mpp32-mcp-server",
@@ -630,6 +820,7 @@ app.route("/api/contact", contactRouter);
 app.route("/api/checkout", checkoutRouter);
 app.route("/api/agent", agentRouter);
 app.route("/api/catalog", catalogRouter);
+app.route("/api/m32", m32Router);
 
 // Metrics route — dynamically loaded to work with bun --hot when file is new
 async function mountMetrics() {

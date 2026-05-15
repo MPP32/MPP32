@@ -8,13 +8,13 @@
     "subfolder": "mcp-server"
   },
   "websiteUrl": "https://mpp32.org",
-  "version": "1.2.2",
+  "version": "1.3.1",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "mpp32-mcp-server",
-      "version": "1.2.2",
+      "version": "1.3.1",
       "transport": {
         "type": "stdio"
       },
@@ -55,6 +55,21 @@
           "isRequired": false,
           "isSecret": false,
           "default": "https://api.mainnet-beta.solana.com"
+        },
+        {
+          "name": "MPP32_PREFERRED_NETWORK",
+          "description": "When both Solana and EVM keys are configured and a challenge advertises multiple networks, force one. Accepts: solana, base, evm, ethereum, or a full CAIP-2 string like solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp.",
+          "format": "string",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "MPP32_TIMEOUT_MS",
+          "description": "Request timeout in milliseconds for all outbound API calls. Range: 1000-300000. Defaults to 30000 (30 seconds).",
+          "format": "string",
+          "isRequired": false,
+          "isSecret": false,
+          "default": "30000"
         }
       ]
     }

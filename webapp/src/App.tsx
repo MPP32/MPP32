@@ -30,6 +30,7 @@ import Build from "./pages/Build";
 import Roadmap from "./pages/Roadmap";
 import Manage from "./pages/Manage";
 import Whitepaper from "./pages/Whitepaper";
+import Token from "./pages/Token";
 import Messages from "./pages/Messages";
 import AgentHub from "./pages/AgentHub";
 import AgentConsole from "./pages/AgentConsole";
@@ -74,6 +75,7 @@ const App = () => (
             <Route path="/build" element={<MainLayout><Build /></MainLayout>} />
             <Route path="/roadmap" element={<MainLayout><Roadmap /></MainLayout>} />
             <Route path="/whitepaper" element={<MainLayout><Whitepaper /></MainLayout>} />
+            <Route path="/token" element={<MainLayout><Token /></MainLayout>} />
             <Route path="/messages" element={<MainLayout><Messages /></MainLayout>} />
             <Route path="/agent-hub" element={<MainLayout><AgentHub /></MainLayout>} />
             <Route path="/agent-console" element={<MainLayout><AgentConsole /></MainLayout>} />

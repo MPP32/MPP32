@@ -98,6 +98,20 @@ export default function Pricing() {
           </div>
         </section>
 
+        {/* M32 Token Exclusive APIs callout */}
+        <div className="card-surface rounded p-5 border-l-2 border-l-mpp-amber flex items-start gap-4">
+          <span className="text-mpp-amber text-base flex-shrink-0 mt-0.5">&#9670;</span>
+          <div>
+            <p className="text-foreground font-semibold text-sm mb-1">Hold M32, unlock exclusive APIs</p>
+            <p className="text-muted-foreground text-sm leading-relaxed mb-2">
+              M32 token holders get access to 3 premium APIs: Whale Tracker, Token Comparison, and Portfolio Scanner.
+            </p>
+            <Link to="/token" className="font-mono text-mpp-amber text-sm hover:opacity-80 transition-opacity">
+              View exclusive APIs &#8594;
+            </Link>
+          </div>
+        </div>
+
         {/* FAQ */}
         <section>
           <h2 className="font-display text-2xl font-semibold text-foreground mb-6">FAQ</h2>

@@ -4,6 +4,7 @@ import { Menu, X, ChevronRight, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navLinks = [
+  { label: "$M32", href: "/token" },
   { label: "Agent", href: "/agent-hub" },
   { label: "Proxy", href: "/build" },
   { label: "Oracle", href: "/oracle" },

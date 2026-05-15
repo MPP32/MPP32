@@ -5,7 +5,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { signX402Payment } from "./x402-signers.js";
 
-const SERVER_VERSION = "1.2.4";
+const SERVER_VERSION = "1.3.1";
 
 // ── Env loading: trim and sanitize aggressively ─────────────────────────────
 // Copy-paste from Claude Desktop / Cursor / Windsurf JSON config UIs frequently
@@ -243,9 +243,17 @@ interface ExecuteResponse {
       latencyMs: number;
       statusCode: number;
       success: boolean;
+      budget?: {
+        budgetLimitUsd: number | null;
+        velocityLimitUsd: number | null;
+        totalSpentUsd: number;
+        remainingBudgetUsd: number | null;
+        hourlySpendUsd: number;
+        budgetUtilizationPercent: number | null;
+      } | null;
     };
   };
-  error?: { message: string; code: string; hint?: string; installCommand?: string };
+  error?: { message: string; code: string; hint?: string; installCommand?: string; budgetStatus?: Record<string, unknown> };
 }
 
 const server = new McpServer({
@@ -340,7 +348,7 @@ server.tool(
       `- x402 (USDC on Solana) payment: ${SOLANA_PRIVATE_KEY ? "yes" : "no — set MPP32_SOLANA_PRIVATE_KEY"}`,
       `- x402 (USDC on Base/EVM) payment: ${PRIVATE_KEY ? "yes" : "no — set MPP32_PRIVATE_KEY"}`,
       ``,
-      `**Ready to pay end-to-end:** ${readyToPay ? "YES — try `query_intelligence` with token=\"M32\" to confirm." : "NO — see the missing items above."}`,
+      `**Ready to pay end-to-end:** ${readyToPay ? "YES — try `get_solana_token_intelligence` with token=\"M32\" to confirm." : "NO — see the missing items above."}`,
       ``,
       `**If a variable shows NOT SET but you set it in claude_desktop_config.json:**`,
       `1. Confirm the file path Claude Desktop actually reads:`,
@@ -411,6 +419,10 @@ server.tool(
       .describe(
         "Filter by catalog source. 'native' = callable end-to-end; 'curated'/'free' = often callable; 'x402-bazaar'/'mcp-registry' = mostly listing-only."
       ),
+    protocol: z
+      .enum(["x402", "tempo", "acp", "ap2", "agtp"])
+      .optional()
+      .describe("Filter by payment protocol (e.g. 'x402' for USDC-settled services)."),
     limit: z
       .number()
       .int()
@@ -419,12 +431,13 @@ server.tool(
       .optional()
       .describe("Max results (default 100, max 500)."),
   },
-  async ({ category, q, source, limit }) => {
+  async ({ category, q, source, protocol, limit }) => {
     try {
       const url = new URL("/api/agent/services", API_URL);
       if (category) url.searchParams.set("category", category);
       if (q) url.searchParams.set("q", q);
       if (source) url.searchParams.set("source", source);
+      if (protocol) url.searchParams.set("protocol", protocol);
       url.searchParams.set("limit", String(limit ?? 100));
 
       const res = await fetchWithTimeout(url.toString(), { headers: buildHeaders() });
@@ -591,6 +604,239 @@ server.tool(
     }
     // Legacy path — direct call to /api/intelligence with manual 402 handling.
     return await legacyIntelligenceCall(token, walletAddress);
+  },
+);
+
+// ── Tool 4: M32-gated Whale Tracker ───────────────────────────────────────
+
+server.tool(
+  "get_m32_whale_tracker",
+  "M32-gated whale analysis for any Solana token. Returns top 20 holders, concentration risk, holder distribution, and buy/sell pressure. Requires the caller to hold 1,000,000+ M32 tokens (balance verified on-chain via X-Wallet-Address header). Free for qualifying holders — no payment required. Returns 403 if the wallet holds insufficient M32.",
+  {
+    token: z
+      .string()
+      .describe("Solana token mint address to analyze for whale activity."),
+    walletAddress: z
+      .string()
+      .describe("Your Solana wallet address. M32 balance is checked on-chain to verify you hold 1M+ M32."),
+  },
+  async ({ token, walletAddress }: { token: string; walletAddress: string }) => {
+    try {
+      const res = await fetchWithTimeout(`${API_URL}/api/m32/whale-tracker`, {
+        method: "POST",
+        headers: buildHeaders({
+          "Content-Type": "application/json",
+          "X-Wallet-Address": safeHeaderValue("walletAddress", walletAddress),
+        }),
+        body: JSON.stringify({ token }),
+      });
+      const text = await res.text();
+      let formatted: string;
+      try { formatted = JSON.stringify(JSON.parse(text), null, 2); } catch { formatted = text; }
+      if (res.status === 403) {
+        return { content: [{ type: "text" as const, text: `**Access denied.** Whale Tracker requires holding 1,000,000+ M32 tokens. Your wallet does not meet the threshold.\n\nBuy M32: https://raydium.io/swap/?inputMint=sol&outputMint=6hKtz8FV7cAQMrbjcBZeTQAcrYep3WCM83164JpJpump` }] };
+      }
+      return { content: [{ type: "text" as const, text: `**Whale Tracker** — \`${token}\`\n\n\`\`\`json\n${formatted}\n\`\`\`` }] };
+    } catch (err) {
+      return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
+    }
+  },
+);
+
+// ── Tool 5: M32-gated Token Comparison ────────────────────────────────────
+
+server.tool(
+  "compare_tokens_m32",
+  "M32-gated head-to-head intelligence comparison of two Solana tokens. Returns side-by-side alpha scores, rug risk, whale activity, volume, liquidity, market data, and a winner verdict. Requires the caller to hold 2,500,000+ M32 tokens (balance verified on-chain via X-Wallet-Address header). Free for qualifying holders. Returns 403 if insufficient M32.",
+  {
+    tokenA: z
+      .string()
+      .describe("First Solana token mint address."),
+    tokenB: z
+      .string()
+      .describe("Second Solana token mint address."),
+    walletAddress: z
+      .string()
+      .describe("Your Solana wallet address. M32 balance is checked on-chain to verify you hold 2.5M+ M32."),
+  },
+  async ({ tokenA, tokenB, walletAddress }: { tokenA: string; tokenB: string; walletAddress: string }) => {
+    try {
+      const res = await fetchWithTimeout(`${API_URL}/api/m32/compare`, {
+        method: "POST",
+        headers: buildHeaders({
+          "Content-Type": "application/json",
+          "X-Wallet-Address": safeHeaderValue("walletAddress", walletAddress),
+        }),
+        body: JSON.stringify({ tokenA, tokenB }),
+      });
+      const text = await res.text();
+      let formatted: string;
+      try { formatted = JSON.stringify(JSON.parse(text), null, 2); } catch { formatted = text; }
+      if (res.status === 403) {
+        return { content: [{ type: "text" as const, text: `**Access denied.** Token Comparison requires holding 2,500,000+ M32 tokens. Your wallet does not meet the threshold.\n\nBuy M32: https://raydium.io/swap/?inputMint=sol&outputMint=6hKtz8FV7cAQMrbjcBZeTQAcrYep3WCM83164JpJpump` }] };
+      }
+      return { content: [{ type: "text" as const, text: `**Token Comparison** — \`${tokenA}\` vs \`${tokenB}\`\n\n\`\`\`json\n${formatted}\n\`\`\`` }] };
+    } catch (err) {
+      return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
+    }
+  },
+);
+
+// ── Tool 6: M32-gated Portfolio Scanner ───────────────────────────────────
+
+server.tool(
+  "scan_portfolio_m32",
+  "M32-gated full wallet portfolio scan. Discovers all SPL tokens in a Solana wallet, runs intelligence on top holdings, and returns per-token analysis with aggregate portfolio risk metrics. Requires the caller to hold 5,000,000+ M32 tokens (balance verified on-chain via X-Wallet-Address header). Free for qualifying holders. Returns 403 if insufficient M32.",
+  {
+    wallet: z
+      .string()
+      .describe("Solana wallet address to scan for token holdings."),
+    walletAddress: z
+      .string()
+      .describe("Your Solana wallet address. M32 balance is checked on-chain to verify you hold 5M+ M32."),
+  },
+  async ({ wallet, walletAddress }: { wallet: string; walletAddress: string }) => {
+    try {
+      const res = await fetchWithTimeout(`${API_URL}/api/m32/portfolio`, {
+        method: "POST",
+        headers: buildHeaders({
+          "Content-Type": "application/json",
+          "X-Wallet-Address": safeHeaderValue("walletAddress", walletAddress),
+        }),
+        body: JSON.stringify({ wallet }),
+      });
+      const text = await res.text();
+      let formatted: string;
+      try { formatted = JSON.stringify(JSON.parse(text), null, 2); } catch { formatted = text; }
+      if (res.status === 403) {
+        return { content: [{ type: "text" as const, text: `**Access denied.** Portfolio Scanner requires holding 5,000,000+ M32 tokens. Your wallet does not meet the threshold.\n\nBuy M32: https://raydium.io/swap/?inputMint=sol&outputMint=6hKtz8FV7cAQMrbjcBZeTQAcrYep3WCM83164JpJpump` }] };
+      }
+      return { content: [{ type: "text" as const, text: `**Portfolio Scanner** — wallet \`${wallet}\`\n\n\`\`\`json\n${formatted}\n\`\`\`` }] };
+    } catch (err) {
+      return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
+    }
+  },
+);
+
+// ── Tool 8: manage_agent_budget ────────────────────────────────────────────
+
+server.tool(
+  "manage_agent_budget",
+  "View, set, or reset the spending circuit breaker for your MPP32 agent session. Use 'get' to check current budget status (remaining budget, hourly velocity, circuit breaker state). Use 'set' to configure spending limits (budget cap in USD, hourly velocity limit, alert threshold percentage). Use 'reset' to manually reset a tripped circuit breaker so the session can resume spending. Circuit breakers trip automatically when budget or velocity limits are exceeded, preventing runaway agent spending.",
+  {
+    action: z.enum(["get", "set", "reset"]).describe("Action: 'get' = view budget status, 'set' = update limits, 'reset' = clear tripped circuit breaker"),
+    budgetLimitUsd: z.number().positive().max(1_000_000).optional().describe("Maximum total session spend in USD. Only used with action='set'."),
+    velocityLimitUsd: z.number().positive().max(1_000_000).optional().describe("Maximum spend per hour in USD. Only used with action='set'."),
+    alertThresholdPercent: z.number().int().min(1).max(100).optional().describe("Budget percentage at which to warn (e.g. 80 = warn at 80% spent). Only used with action='set'."),
+  },
+  async ({ action, budgetLimitUsd, velocityLimitUsd, alertThresholdPercent }) => {
+    if (!AGENT_KEY) {
+      return {
+        content: [{ type: "text" as const, text: "**MPP32_AGENT_KEY not configured.** Set it in your MCP config to manage budgets." }],
+      };
+    }
+
+    try {
+      if (action === "get") {
+        const res = await fetchWithTimeout(
+          new URL("/api/agent/spending", API_URL).toString(),
+          { headers: buildHeaders() },
+        );
+        if (!res.ok) {
+          const err = await res.json().catch(() => null) as { error?: { message?: string } } | null;
+          return { content: [{ type: "text" as const, text: `Error fetching budget: ${err?.error?.message ?? res.statusText}` }] };
+        }
+        const data = (await res.json() as { data: Record<string, unknown> }).data;
+        const lines: string[] = [
+          `**MPP32 Session Budget Status**`,
+          ``,
+        ];
+        if (data.budgetLimitUsd != null) {
+          lines.push(`Budget: $${(data.totalSpentUsd as number).toFixed(4)} spent of $${(data.budgetLimitUsd as number).toFixed(4)} ($${(data.remainingBudgetUsd as number).toFixed(4)} remaining, ${data.budgetUtilizationPercent}% used)`);
+        } else {
+          lines.push(`Budget: unlimited (no cap set)`);
+          lines.push(`Total spent: $${(data.totalSpentUsd as number).toFixed(4)} across ${data.totalSettledCalls} settled calls`);
+        }
+        if (data.velocityLimitUsd != null) {
+          lines.push(`Velocity: $${(data.hourlySpendUsd as number).toFixed(4)}/hr of $${(data.velocityLimitUsd as number).toFixed(4)}/hr limit (${data.hourlySettledCalls} calls this hour)`);
+        }
+        if (data.circuitBreakerTripped) {
+          lines.push(``);
+          lines.push(`**CIRCUIT BREAKER TRIPPED** — ${data.circuitBreakerReason}`);
+          lines.push(`Tripped at: ${data.circuitBreakerTrippedAt}`);
+          lines.push(`Use action="reset" to resume spending.`);
+        }
+        if ((data.byService as unknown[])?.length) {
+          lines.push(``);
+          lines.push(`**Spending by service:**`);
+          for (const s of data.byService as Array<{ service: string; totalSpentUsd: number; count: number }>) {
+            lines.push(`- ${s.service}: $${s.totalSpentUsd.toFixed(4)} (${s.count} calls)`);
+          }
+        }
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+      }
+
+      if (action === "set") {
+        const payload: Record<string, unknown> = {};
+        if (budgetLimitUsd !== undefined) payload.budgetLimitUsd = budgetLimitUsd;
+        if (velocityLimitUsd !== undefined) payload.velocityLimitUsd = velocityLimitUsd;
+        if (alertThresholdPercent !== undefined) payload.alertThresholdPercent = alertThresholdPercent;
+        if (Object.keys(payload).length === 0) {
+          return { content: [{ type: "text" as const, text: "Provide at least one of: budgetLimitUsd, velocityLimitUsd, alertThresholdPercent." }] };
+        }
+        const res = await fetchWithTimeout(
+          new URL("/api/agent/budget", API_URL).toString(),
+          {
+            method: "PATCH",
+            headers: buildHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify(payload),
+          },
+        );
+        if (!res.ok) {
+          const err = await res.json().catch(() => null) as { error?: { message?: string } } | null;
+          return { content: [{ type: "text" as const, text: `Error updating budget: ${err?.error?.message ?? res.statusText}` }] };
+        }
+        const data = (await res.json() as { data: Record<string, unknown> }).data;
+        const lines: string[] = [
+          `**Budget updated successfully.**`,
+          ``,
+          data.budgetLimitUsd != null ? `Budget limit: $${(data.budgetLimitUsd as number).toFixed(4)}` : `Budget limit: unlimited`,
+          data.velocityLimitUsd != null ? `Velocity limit: $${(data.velocityLimitUsd as number).toFixed(4)}/hr` : `Velocity limit: unlimited`,
+          `Total spent: $${(data.totalSpentUsd as number).toFixed(4)}`,
+          data.remainingBudgetUsd != null ? `Remaining: $${(data.remainingBudgetUsd as number).toFixed(4)}` : ``,
+          data.circuitBreakerTripped ? `\n**Note:** Circuit breaker is still tripped. Use action="reset" to resume.` : ``,
+        ].filter(Boolean);
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+      }
+
+      if (action === "reset") {
+        const res = await fetchWithTimeout(
+          new URL("/api/agent/circuit-breaker/reset", API_URL).toString(),
+          {
+            method: "POST",
+            headers: buildHeaders({ "Content-Type": "application/json" }),
+          },
+        );
+        if (!res.ok) {
+          const err = await res.json().catch(() => null) as { error?: { message?: string } } | null;
+          return { content: [{ type: "text" as const, text: `Error resetting circuit breaker: ${err?.error?.message ?? res.statusText}` }] };
+        }
+        const data = (await res.json() as { data: Record<string, unknown> }).data;
+        const lines: string[] = [
+          data.previousReason
+            ? `**Circuit breaker reset.** Previous reason: ${data.previousReason}.`
+            : `**Circuit breaker was not tripped.** No action needed.`,
+          ``,
+          data.budgetLimitUsd != null ? `Budget: $${(data.totalSpentUsd as number).toFixed(4)} / $${(data.budgetLimitUsd as number).toFixed(4)} ($${(data.remainingBudgetUsd as number).toFixed(4)} remaining)` : ``,
+          `Session can resume spending.`,
+        ].filter(Boolean);
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+      }
+
+      return { content: [{ type: "text" as const, text: "Unknown action. Use 'get', 'set', or 'reset'." }] };
+    } catch (err) {
+      return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
+    }
   },
 );
 
@@ -796,6 +1042,10 @@ function formatExecuteSuccess(
   } else if (meta?.paymentMethod === "unsettled") {
     lines.push(`Service responded but no payment was verified. This should not happen for paid services.`);
   }
+  if (meta?.budget && meta.budget.budgetLimitUsd != null) {
+    const b = meta.budget as { budgetLimitUsd: number; totalSpentUsd: number; remainingBudgetUsd: number; budgetUtilizationPercent: number };
+    lines.push(`Budget: $${b.remainingBudgetUsd.toFixed(4)} remaining (${b.budgetUtilizationPercent}% of $${b.budgetLimitUsd.toFixed(4)} used)`);
+  }
   lines.push("");
   lines.push("```json");
   lines.push(formatted);
@@ -809,6 +1059,25 @@ function formatExecuteHardError(
   body: ExecuteResponse | null,
 ): { content: Array<{ type: "text"; text: string }> } {
   const code = body?.error?.code;
+  if (code === "MPP32_CIRCUIT_BREAKER_TRIPPED" || (status === 429 && (body?.error as any)?.budgetStatus)) {
+    const bs = (body?.error as any)?.budgetStatus;
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: [
+            `**Circuit breaker tripped** — spending limit reached.`,
+            ``,
+            body?.error?.message ?? "Session budget exhausted.",
+            bs?.budgetLimitUsd != null ? `Budget: $${bs.totalSpentUsd?.toFixed(4) ?? "?"} / $${bs.budgetLimitUsd.toFixed(4)}` : "",
+            bs?.velocityLimitUsd != null ? `Velocity: $${bs.hourlySpendUsd?.toFixed(4) ?? "?"}/hr of $${bs.velocityLimitUsd.toFixed(4)}/hr limit` : "",
+            ``,
+            `To resume: use \`manage_agent_budget\` with action="reset", or increase the budget with action="set".`,
+          ].filter(Boolean).join("\n"),
+        },
+      ],
+    };
+  }
   if (code === "NOT_HTTP_CALLABLE") {
     return {
       content: [

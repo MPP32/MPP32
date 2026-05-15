@@ -19,10 +19,12 @@
     "@vibecodeapp/backend-sdk": "^1.0.1",
     "@vibecodeapp/cloud-studio": "^0.2.4",
     "@vibecodeapp/proxy": "^2.0.3",
+    "bs58": "^6.0.0",
     "hono": "4.6.0",
     "mppx": "^0.4.12",
     "prisma": "5.22.0",
     "resend": "^6.12.0",
+    "tweetnacl": "^1.0.3",
     "zod": "4.1.11"
   }
 }
