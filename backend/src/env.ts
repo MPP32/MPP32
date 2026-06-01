@@ -16,7 +16,17 @@ const envSchema = z.object({
   RESEND_API_KEY: z.string().optional(),
   BACKEND_URL: z.string().url().optional(),
   X402_RECIPIENT_ADDRESS: solanaAddress.optional().default("9Pa8yUe8k1aRAoS1J8T5d4Mc4zXH2QTKiHE7wibowt6S"),
-  X402_FACILITATOR_URL: z.string().url().optional().default("https://x402.org/facilitator"),
+  // Primary facilitator. PayAI advertises Solana mainnet with no API key
+  // and gas sponsorship, which makes it the default rail.
+  X402_FACILITATOR_URL: z.string().url().optional().default("https://facilitator.payai.network"),
+  // Failover facilitator. Coinbase CDP advertises Solana mainnet with
+  // metered pricing once CDP API keys are wired. Configured here so failover
+  // becomes live the moment those keys land.
+  X402_FACILITATOR_FALLBACK_URL: z.string().url().optional().default("https://facilitator.payai.network"),
+  // CAIP-2 network ID the backend issues challenges for. The startup probe
+  // refuses to boot in production unless the configured facilitator
+  // advertises support for this exact network.
+  X402_NETWORK: z.string().optional().default("solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"),
   X402_ENABLED: z.enum(["true", "false"]).optional().default("true"),
   SOLANA_RPC_URL: z.string().url().optional().default("https://api.mainnet-beta.solana.com"),
   M32_TOKEN_MINT: z.string().optional().default("6hKtz8FV7cAQMrbjcBZeTQAcrYep3WCM83164JpJpump"),

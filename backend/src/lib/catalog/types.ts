@@ -21,6 +21,7 @@ export interface CatalogItem {
   iconUrl?: string | null
   popularity?: number
   verified?: boolean
+  healthStatus?: 'reachable' | 'unknown'
 }
 
 export interface CrawlerResult {

@@ -92,7 +92,18 @@ export function HeroSection() {
               </Link>
               <Link to="/catalog">
                 <button className="border border-mpp-border text-foreground hover:border-mpp-amber/40 transition-colors flex items-center gap-2 px-6 py-2.5 rounded text-sm w-full sm:w-auto justify-center">
-                  Browse 4,000+ services
+                  Browse 8,000+ services
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </Link>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-3 mb-3">
+              <Link to="/governance">
+                <button
+                  className="flex items-center gap-2 px-6 py-2.5 rounded text-sm font-semibold w-full sm:w-auto justify-center text-white transition-all duration-200 hover:scale-[1.02] hover:shadow-lg hover:shadow-purple-500/20"
+                  style={{ background: "linear-gradient(135deg, #7c3aed 0%, #9333ea 40%, #D4840A 100%)" }}
+                >
+                  PIVX Governance
                   <ArrowRight className="w-4 h-4" />
                 </button>
               </Link>

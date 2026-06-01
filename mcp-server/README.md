@@ -22,6 +22,12 @@ One install. Pay any x402 endpoint on Solana from your agent. Browse a federated
 
 The MCP server ships signers for both Solana and Base out of the box. When a paid call returns a 402, the server picks the network that matches the key you configured and settles the payment in one round trip.
 
+## Try it free first (no keys, no setup)
+
+The MCP server exposes a **`try_solana_token_intelligence_free`** tool that returns the full Intelligence Oracle payload (alpha score, rug risk, whale activity, smart money signals, 24h pump probability, market data) for any Solana token with **zero configuration** — no `MPP32_AGENT_KEY`, no Solana key, no payment. Rate-limited to 10 calls/minute per IP. Use it to evaluate the oracle, then switch to `get_solana_token_intelligence` for unlimited attributed usage at $0.008/query (M32 holders save up to 40%).
+
+Just install the server and ask your agent: _"Use mpp32 to get a free intelligence preview for SOL."_
+
 ## Why this beats running your own integrations
 
 Most agent stacks stop at "the model can call a function." That works until the function costs money. The moment your agent needs premium data, a paid model, a trading signal, or a token analytics call, you are back to building accounts, storing API keys, watching budgets, and writing custom 402 handlers for every provider.
@@ -33,6 +39,7 @@ MPP32 replaces all of that with one MCP server. Your agent asks for a service by
 * Browse a live catalog of over 4,500 paid and free APIs across categories like token intelligence, market data, web search, image generation, embeddings, DeFi analytics, wallet scoring, on chain queries, and trading signals.
 * Pay any provider in the catalog using whichever protocol fits, with settlement that lands in seconds.
 * Run real time Solana token intelligence with alpha scoring, rug risk, whale flow, and 24 hour pump probability.
+* Query live PIVX DAO governance data: active proposals, masternode voting tallies, budget allocation, and network deflation metrics — all free, no payment key needed.
 * Track every call, every dollar settled, and every protocol used from a dashboard at mpp32.org.
 * Get an automatic 20 percent or 40 percent discount on native services for holding M32 once your wallet is verified.
 * Access M32-gated exclusive APIs: Whale Tracker (1M M32), Token Comparison (2.5M M32), and Portfolio Scanner (5M M32) — free for holders, unavailable to non-holders.
@@ -176,6 +183,27 @@ M32-gated full wallet portfolio scan. Discovers all SPL tokens in a wallet, runs
 ```json
 { "wallet": "<wallet-to-scan>", "walletAddress": "<your-solana-wallet>" }
 ```
+
+### `get_pivx_dao_intelligence`
+
+Real-time PIVX DAO governance intelligence. Returns active budget proposals with masternode voting tallies, budget allocation status, network deflation metrics, and masternode network health. PIVX is a fully community-governed cryptocurrency where Masternode owners vote on budget proposals every ~30 days. Data sourced live from pivx.org/proposals and the PIVX blockchain. Free — no payment key required.
+
+```json
+{ "filter": "all" }
+```
+
+```json
+{ "filter": "passing", "includeStats": true }
+```
+
+Two parameters:
+
+* **filter** (optional) — `all` (default), `passing`, or `failing`. Filters proposals by voting status.
+* **includeStats** (optional, default true) — include network overview and deflation metrics alongside proposals.
+
+The response includes a network overview (masternode count, passing threshold, monthly budget in PIV and USD, budget allocation percentage, block height, supply stats), deflation metrics (unallocated treasury PIV that are never minted, effective inflation reduction, proposal fee burn), and all active proposals with vote counts, payment amounts, installments, and links.
+
+View the governance dashboard at [mpp32.org/governance](https://mpp32.org/governance).
 
 ### `manage_agent_budget`
 

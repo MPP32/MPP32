@@ -4,6 +4,85 @@ All notable changes to `mpp32-mcp-server` are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-06-01
+
+### Added
+
+* **`try_solana_token_intelligence_free` MCP tool.** Free intelligence
+  preview, no agent key and no payment key required. Returns the same alpha
+  score, rug risk, whale activity, smart money signals, pump probability,
+  and market data payload as the paid endpoint. Rate limit ten calls per
+  minute per IP. Ships as the first call agents make when evaluating MPP32
+  so the oracle proves itself before any credential setup.
+
+### Changed
+
+* **`get_solana_token_intelligence` description updated** to direct agents
+  with no keys configured at `try_solana_token_intelligence_free` first.
+* **`get_mpp32_diagnostics` output updated** to surface the free preview as
+  the immediate next step when a key configuration is incomplete.
+
+### Backend (server side compatibility, no client action required)
+
+* x402 settlement runs against PayAI's facilitator
+  (`https://facilitator.payai.network`) with Coinbase CDP wired as the
+  failover endpoint. Both advertise Solana mainnet
+  (`solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`). A startup probe and a CI
+  integration test confirm the configured facilitator advertises the
+  configured network on every deploy, and per request failover routes
+  verify and settle to the backup on transport errors. The MCP signer's
+  network detection (`x402-signers.ts`) and protocol handling are unchanged.
+
+## [1.4.0] - 2026-05-21
+
+### Added
+
+* **`get_pivx_dao_intelligence` MCP tool — real-time PIVX DAO governance
+  intelligence.** Returns active budget proposals with masternode voting
+  tallies (Yes/No counts, net yes percentage), budget allocation status,
+  network health metrics, and deflation/fee burn analysis. PIVX is a fully
+  community-governed cryptocurrency where Masternode owners vote on budget
+  proposals every ~30 days (43,200 blocks per superblock cycle, 432,000 PIV
+  max monthly budget). Data is sourced live from pivx.org/proposals (HTML
+  scraping with structured `data-*` attributes) and the Chainz CryptoID
+  blockchain API. Cached for 5 minutes. Free — no payment key required.
+
+  Parameters:
+  - `filter` (optional, enum: `all` | `passing` | `failing`) — filter
+    proposals by voting status. Default: `all`.
+  - `includeStats` (optional, boolean) — include network stats and deflation
+    metrics. Default: `true`.
+
+  The response includes:
+  - **Network Overview:** masternode count, passing threshold (10% of
+    masternodes), monthly budget (PIV and USD), budget allocation percentage,
+    block height, total/circulating supply.
+  - **Deflation Metrics:** unallocated treasury PIV per cycle (never minted),
+    annual unallocated estimate, effective inflation reduction percentage,
+    proposal submission fee burn (50 PIV per proposal).
+  - **Active Proposals:** name, status (passing/failing), funded flag,
+    vote counts (yes/no), net yes percentage, monthly and total payment
+    amounts (PIV and USD), installments remaining, budget usage percentage,
+    and link to proposal details.
+
+* **PIVX Governance Oracle catalog entry.** Listed as `curated:pivx-governance`
+  in the federated catalog (category: crypto, free, verified). Discoverable
+  via `list_mpp32_services` with `q=pivx` or `category=crypto`.
+
+* **Backend `/api/governance` endpoints.** Three routes serve the PIVX data:
+  `GET /api/governance` (full governance data + deflation), `GET
+  /api/governance/proposals?status=passing|failing` (filtered proposals),
+  `GET /api/governance/stats` (network stats only). Rate limited to 30
+  req/min.
+
+* **Frontend `/governance` page** at mpp32.org/governance. Live dashboard
+  with proposal cards, vote bars, budget stats, deflation metrics, and an
+  explainer on how PIVX governance works.
+
+### Changed
+
+* **`server.json` version bumped to 1.4.0** to match the npm release.
+
 ## [1.3.1] - 2026-05-15
 
 ### Fixed

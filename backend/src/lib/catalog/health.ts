@@ -252,10 +252,21 @@ export async function checkX402Endpoint(endpointUrl: string): Promise<HealthResu
   return { status: 'broken', reason: `http_${res.status}`, error: `Upstream returned ${res.status}` }
 }
 
+const AUTH_GATED_HOSTS = new Set([
+  'api-inference.huggingface.co',
+  'api.replicate.com',
+])
+
 /**
  * Check a free HTTP / MCP-HTTP endpoint by reachability only.
  */
 export async function checkReachability(endpointUrl: string): Promise<HealthResult> {
+  try {
+    const host = new URL(endpointUrl).host
+    if (AUTH_GATED_HOSTS.has(host)) {
+      return { status: 'reachable', reason: 'auth_gated_known_provider' }
+    }
+  } catch { /* fall through to normal check */ }
   if (!endpointUrl || !/^https?:\/\//.test(endpointUrl)) {
     return { status: 'broken', reason: 'invalid_url' }
   }

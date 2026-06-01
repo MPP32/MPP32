@@ -10,9 +10,10 @@ import { checkoutRouter } from "./routes/checkout";
 import { agentRouter } from "./routes/agent";
 import { catalogRouter } from "./routes/catalog";
 import { m32Router } from "./routes/m32-apis";
+import { governanceRouter } from "./routes/governance";
 import { logger as honoLogger } from "hono/logger";
 import { prisma } from "./lib/db.js";
-import { isX402Enabled, SOLANA_NETWORK, USDC_MINT } from "./lib/x402.js";
+import { isX402Enabled, SOLANA_NETWORK, USDC_MINT, validateFacilitatorAtBoot } from "./lib/x402.js";
 import { isAP2Enabled } from "./lib/ap2.js";
 import { isACPEnabled } from "./lib/acp.js";
 import { isAGTPEnabled } from "./lib/agtp.js";
@@ -40,6 +41,12 @@ declare module "hono" {
     protocolUsed: string;
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Facilitator boot validator. Runs before traffic so settlement reliability
+// is a guarantee at process start. Top-level await is supported in Bun.
+// ─────────────────────────────────────────────────────────────────────────────
+await validateFacilitatorAtBoot();
 
 const app = new Hono();
 
@@ -639,6 +646,23 @@ app.get("/api/mcp-config", (c) => {
           },
         },
         {
+          name: "try_solana_token_intelligence_free",
+          description: "Free preview of the MPP32 Intelligence Oracle. Returns the same alpha score, rug risk, whale activity, smart money signals, 24h pump probability, and market data as the paid endpoint — no agent key or Solana private key required. Rate-limited to 10 calls/minute per IP. Use this to evaluate the oracle, then switch to `get_solana_token_intelligence` for unlimited, attributed usage at $0.008/query (M32 holders save up to 40%).",
+          inputSchema: {
+            type: "object",
+            required: ["token"],
+            properties: {
+              token: { type: "string", description: "Solana token mint address or ticker symbol" },
+            },
+          },
+          annotations: {
+            title: "Solana Token Intelligence (Free Demo)",
+            destructiveHint: false,
+            idempotentHint: true,
+            openWorldHint: true,
+          },
+        },
+        {
           name: "call_mpp32_endpoint",
           description: "Call any registered MPP32 proxy endpoint with automatic multi-protocol payment handling. Supports 5 payment and authorization protocols: Tempo (pathUSD on Ethereum L2), x402 (USDC on Solana), ACP (Agent Commerce Protocol for checkout sessions), AP2 (W3C Verifiable Credential authorization), and AGTP (Agent Transfer Protocol for agent identity). The proxy handles HTTP 402 challenge-response, payment verification, and request forwarding automatically.",
           inputSchema: {
@@ -821,6 +845,7 @@ app.route("/api/checkout", checkoutRouter);
 app.route("/api/agent", agentRouter);
 app.route("/api/catalog", catalogRouter);
 app.route("/api/m32", m32Router);
+app.route("/api/governance", governanceRouter);
 
 // Metrics route — dynamically loaded to work with bun --hot when file is new
 async function mountMetrics() {
@@ -1064,6 +1089,14 @@ seedCatalogIfEmpty()
 setInterval(() => {
   refreshCatalog('scheduled-refresh')
 }, CATALOG_REFRESH_INTERVAL_MS)
+
+// Pre-warm PIVX governance cache so the first /governance page load is instant
+import { fetchPivxGovernance } from './lib/pivx-provider.js'
+fetchPivxGovernance().catch((err) =>
+  logEntry('warn', 'PIVX governance cache warm-up failed (will retry on first request)', {
+    error: err instanceof Error ? err.message : String(err),
+  }),
+)
 
 // Separate cadence to keep chewing through stale rows between crawl ticks.
 // If a previous backfill is still running, the next interval just acquires its

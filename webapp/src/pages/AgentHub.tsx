@@ -300,7 +300,7 @@ export default function AgentHub() {
             </Link>
             <Link to="/catalog">
               <button className="border border-mpp-amber/40 bg-mpp-amber/5 text-mpp-amber hover:bg-mpp-amber/10 transition-colors flex items-center gap-2 px-6 py-2.5 rounded text-sm font-semibold w-full sm:w-auto justify-center">
-                Browse 4,000+ Services
+                Browse 8,000+ Services
                 <ArrowRight className="w-4 h-4" />
               </button>
             </Link>

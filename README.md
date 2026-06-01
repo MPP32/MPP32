@@ -24,14 +24,26 @@ MPP32 replaces all of that. Your agent asks for a service by name. The proxy fin
 
 | Rail | Status | Settles in | Network | Verification |
 |:-----|:-------|:-----------|:--------|:-------------|
-| x402 | Production | USDC | Solana mainnet | Solana facilitator |
-| x402 | Production | USDC | Base | Base facilitator |
+| x402 | Production | USDC | Solana mainnet | PayAI facilitator with Coinbase CDP failover |
+| x402 | Production | USDC | Base | PayAI facilitator with Coinbase CDP failover |
 | Tempo | Envelope wired, disabled in production | pathUSD | Ethereum L2 | mppx SDK (client signer pending) |
 | ACP | Envelope wired, disabled in production | Checkout session | Multi chain | Database backed flow |
 | AP2 | Envelope wired, disabled in production | Verifiable credentials | Chain agnostic | ECDSA P-256 |
 | AGTP | Envelope wired, disabled in production | Agent certificates | Chain agnostic | HMAC SHA256 |
 
+The backend refuses to boot when its configured facilitator does not advertise the configured network, so settlement reliability is a guarantee at process start. A CI integration test runs against the live facilitator on every push to keep the env defaults honest. Per request failover routes verify and settle to the backup facilitator on transport errors.
+
 The proxy implements every envelope and verifies challenges in tests, but only x402 has a tested end to end client flow in this MCP today. The other rails light up as their signers ship.
+
+## Try it free in 30 seconds
+
+Install the MCP server with no keys, no signup, no payment. Ask your agent for a token analysis and the free preview tool returns the full Intelligence Oracle payload immediately.
+
+```bash
+npx -y mpp32-mcp-server@latest
+```
+
+The `try_solana_token_intelligence_free` tool ships out of the box. Same payload as the paid endpoint, capped at ten calls per minute per IP. Once the data quality earns trust, swap in keys for unlimited attributed usage.
 
 ## Install
 

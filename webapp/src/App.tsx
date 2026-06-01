@@ -35,6 +35,7 @@ import Messages from "./pages/Messages";
 import AgentHub from "./pages/AgentHub";
 import AgentConsole from "./pages/AgentConsole";
 import Catalog from "./pages/Catalog";
+import Governance from "./pages/Governance";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -80,6 +81,7 @@ const App = () => (
             <Route path="/agent-hub" element={<MainLayout><AgentHub /></MainLayout>} />
             <Route path="/agent-console" element={<MainLayout><AgentConsole /></MainLayout>} />
             <Route path="/catalog" element={<MainLayout><Catalog /></MainLayout>} />
+            <Route path="/governance" element={<MainLayout><Governance /></MainLayout>} />
             <Route path="/manage" element={<Manage />} />
             <Route path="/dashboard" element={<Dashboard />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}

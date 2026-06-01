@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "bun run --hot src/index.ts",
     "start": "bun run src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "bun test src/__tests__"
   },
   "devDependencies": {
     "@types/bun": "latest",
@@ -20,6 +21,7 @@
     "@vibecodeapp/cloud-studio": "^0.2.4",
     "@vibecodeapp/proxy": "^2.0.3",
     "bs58": "^6.0.0",
+    "cheerio": "^1.2.0",
     "hono": "4.6.0",
     "mppx": "^0.4.12",
     "prisma": "5.22.0",

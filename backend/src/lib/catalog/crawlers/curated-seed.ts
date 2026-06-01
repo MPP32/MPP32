@@ -276,6 +276,23 @@ const CURATED: CatalogItem[] = [
     popularity: 100,
     verified: true,
   },
+  {
+    sourceId: 'pivx-governance-oracle',
+    slug: 'curated:pivx-governance',
+    name: 'PIVX Governance Oracle',
+    description: 'Real-time PIVX DAO governance intelligence — active budget proposals, masternode voting tallies, treasury allocation, and network deflation metrics. Free, no API key required.',
+    category: 'crypto',
+    endpointUrl: '/api/governance',
+    websiteUrl: 'https://mpp32.org/governance',
+    protocol: 'http',
+    protocols: ['http'],
+    pricePerQuery: 0,
+    priceCurrency: 'USD',
+    tags: ['pivx', 'governance', 'dao', 'masternode', 'voting', 'free', 'treasury', 'deflation'],
+    metadata: { provider: 'MPP32 x PIVX', free: true, mcpTool: 'get_pivx_dao_intelligence' },
+    popularity: 90,
+    verified: true,
+  },
   // MCP servers — registry-discoverable, free public services
   {
     sourceId: 'mcp:filesystem',

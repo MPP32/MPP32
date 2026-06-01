@@ -5,7 +5,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { signX402Payment } from "./x402-signers.js";
 
-const SERVER_VERSION = "1.3.1";
+const SERVER_VERSION = "1.5.0";
 
 // ── Env loading: trim and sanitize aggressively ─────────────────────────────
 // Copy-paste from Claude Desktop / Cursor / Windsurf JSON config UIs frequently
@@ -348,7 +348,7 @@ server.tool(
       `- x402 (USDC on Solana) payment: ${SOLANA_PRIVATE_KEY ? "yes" : "no — set MPP32_SOLANA_PRIVATE_KEY"}`,
       `- x402 (USDC on Base/EVM) payment: ${PRIVATE_KEY ? "yes" : "no — set MPP32_PRIVATE_KEY"}`,
       ``,
-      `**Ready to pay end-to-end:** ${readyToPay ? "YES — try `get_solana_token_intelligence` with token=\"M32\" to confirm." : "NO — see the missing items above."}`,
+      `**Ready to pay end-to-end:** ${readyToPay ? "YES — try `get_solana_token_intelligence` with token=\"M32\" to confirm." : "NO — see the missing items above. Meanwhile, you can still call `try_solana_token_intelligence_free` (10/min/IP, no keys required) to evaluate the oracle."}`,
       ``,
       `**If a variable shows NOT SET but you set it in claude_desktop_config.json:**`,
       `1. Confirm the file path Claude Desktop actually reads:`,
@@ -578,7 +578,7 @@ server.tool(
 
 server.tool(
   "get_solana_token_intelligence",
-  "Get real-time Solana token intelligence from the MPP32 Intelligence Oracle. Returns alpha score (0-100), rug risk assessment, whale activity, smart money signals, 24h pump probability, projected ROI ranges, and aggregated DexScreener/Jupiter/CoinGecko market data. Costs $0.008 per query, paid automatically via x402 (USDC on Solana) or Tempo (pathUSD on Eth L2). M32 token holders receive up to 40% discount once their wallet is signature-verified. Set MPP32_AGENT_KEY in config to attribute calls to your dashboard.",
+  "Get real-time Solana token intelligence from the MPP32 Intelligence Oracle. Returns alpha score (0-100), rug risk assessment, whale activity, smart money signals, 24h pump probability, projected ROI ranges, and aggregated DexScreener/Jupiter/CoinGecko market data. Costs $0.008 per query, paid automatically via x402 (USDC on Solana) or Tempo (pathUSD on Eth L2). M32 token holders receive up to 40% discount once their wallet is signature-verified. Set MPP32_AGENT_KEY in config to attribute calls to your dashboard. **New users with no keys configured: call `try_solana_token_intelligence_free` first** — it returns the same payload, rate-limited to 10/min, no payment or key required.",
   {
     token: z
       .string()
@@ -604,6 +604,66 @@ server.tool(
     }
     // Legacy path — direct call to /api/intelligence with manual 402 handling.
     return await legacyIntelligenceCall(token, walletAddress);
+  },
+);
+
+// ── Tool 3b: Free Intelligence Demo ────────────────────────────────────────
+// No payment, no key. Hits /api/intelligence/demo, which is rate-limited per
+// IP. Intended as the first call new users (and Claude itself) make when
+// trying MPP32 — they see real alpha scores and signals BEFORE encountering
+// any payment wall. This is the conversion funnel fix: agents today bounce
+// off the 402, so we let them taste the product first.
+
+server.tool(
+  "try_solana_token_intelligence_free",
+  "FREE preview of the MPP32 Intelligence Oracle. No payment, no agent key, no Solana private key required. Returns the SAME payload as the paid endpoint (alpha score, rug risk, whale activity, smart money signals, pump probability, market data) for any Solana token. Rate-limited to 10 calls/minute per IP. Use this to evaluate the data quality. Once you're convinced, set MPP32_AGENT_KEY + a payment key and switch to `get_solana_token_intelligence` for unlimited, attributed usage and M32-holder discounts.",
+  {
+    token: z
+      .string()
+      .describe(
+        "Solana token mint address or ticker symbol (e.g. SOL, BONK, JUP, M32, or full base58 address).",
+      ),
+  },
+  async ({ token }: { token: string }) => {
+    try {
+      const res = await fetchWithTimeout(`${API_URL}/api/intelligence/demo`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      const text = await res.text();
+      let formatted: string;
+      try { formatted = JSON.stringify(JSON.parse(text), null, 2); } catch { formatted = text; }
+      if (res.status === 429) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Demo rate limit reached (10 calls/minute per IP). Wait a minute and retry, or set up paid access for unlimited queries:\n\n1. Get an agent key: ${API_URL}/agent-console\n2. Add MPP32_AGENT_KEY + MPP32_SOLANA_PRIVATE_KEY to your MCP config\n3. Call \`get_solana_token_intelligence\` instead — $0.008/query, M32 holders save up to 40%.`,
+          }],
+        };
+      }
+      if (!res.ok) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Demo returned HTTP ${res.status}:\n\n\`\`\`json\n${formatted}\n\`\`\``,
+          }],
+        };
+      }
+      return {
+        content: [{
+          type: "text" as const,
+          text: `**MPP32 Intelligence Oracle (FREE DEMO)** — \`${token}\`\n\n${formatted}\n\n---\n_Demo result. Same payload as the paid endpoint. Rate-limited to 10/min/IP. For unlimited usage and dashboard attribution, set MPP32_AGENT_KEY (get one at ${API_URL}/agent-console) and use \`get_solana_token_intelligence\`._`,
+        }],
+      };
+    } catch (err) {
+      return {
+        content: [{
+          type: "text" as const,
+          text: `Network error reaching ${API_URL}: ${err instanceof Error ? err.message : String(err)}`,
+        }],
+      };
+    }
   },
 );
 
@@ -714,6 +774,101 @@ server.tool(
       return { content: [{ type: "text" as const, text: `**Portfolio Scanner** — wallet \`${wallet}\`\n\n\`\`\`json\n${formatted}\n\`\`\`` }] };
     } catch (err) {
       return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
+    }
+  },
+);
+
+// ── Tool 7: get_pivx_dao_intelligence ─────────────────────────────────────
+// Self-contained: scrapes pivx.org/proposals + Chainz CryptoID directly.
+// Does NOT depend on any backend endpoint — works for every npm user out of the box.
+
+import { fetchPivxGovernance } from "./pivx-provider.js";
+import type { PivxGovernanceData } from "./pivx-provider.js";
+
+server.tool(
+  "get_pivx_dao_intelligence",
+  "Get real-time PIVX DAO governance intelligence. Returns active budget proposals with masternode voting tallies (Yes/No counts, net yes percentages), budget allocation status, network deflation metrics (unallocated treasury PIV that are never minted), and masternode network health. PIVX is a fully community-governed cryptocurrency where Masternode owners vote on budget proposals every ~30 days (43,200 blocks per superblock cycle, 432,000 PIV max monthly budget). Data scraped live from pivx.org/proposals and the PIVX blockchain via Chainz CryptoID. Cached for 5 minutes. Free — no payment or API key required.",
+  {
+    filter: z
+      .enum(["all", "passing", "failing"])
+      .default("all")
+      .optional()
+      .describe("Filter proposals by status: 'all' (default), 'passing' (funded proposals), or 'failing' (below threshold)."),
+    includeStats: z
+      .boolean()
+      .default(true)
+      .optional()
+      .describe("Include network stats and deflation metrics (default: true)."),
+  },
+  async ({ filter, includeStats }) => {
+    try {
+      const gov: PivxGovernanceData = await fetchPivxGovernance();
+
+      const lines: string[] = [];
+      lines.push("# PIVX DAO Governance Intelligence");
+      lines.push("");
+
+      if (includeStats !== false) {
+        const n = gov.network;
+        lines.push("## Network Overview");
+        lines.push(`- **Masternodes Online:** ${n.masternodeCount.toLocaleString()}`);
+        lines.push(`- **Passing Threshold:** ${n.passingThreshold} votes (10% of masternodes)`);
+        lines.push(`- **Monthly Budget:** ${n.monthlyBudgetPiv.toLocaleString()} PIV (~$${n.monthlyBudgetUsd.toLocaleString()})`);
+        lines.push(`- **Budget Allocated:** ${n.budgetAllocatedPiv.toLocaleString()} PIV (${n.budgetAllocatedPercent}%)`);
+        if (n.blockHeight) lines.push(`- **Block Height:** ${n.blockHeight.toLocaleString()}`);
+        if (n.totalSupply) lines.push(`- **Total Supply:** ${Math.round(n.totalSupply).toLocaleString()} PIV`);
+        lines.push("");
+
+        const d = gov.deflation;
+        lines.push("## Deflation / Fee Burn Metrics");
+        lines.push(`- **Unallocated PIV This Cycle:** ${d.unallocatedPivPerCycle.toLocaleString()} PIV (never minted)`);
+        lines.push(`- **Annual Unallocated (est.):** ${d.annualUnallocatedPiv.toLocaleString()} PIV`);
+        lines.push(`- **Effective Inflation Reduction:** ${d.effectiveInflationReduction}`);
+        lines.push(`- **Proposal Submission Fee:** ${d.proposalFeeBurnPiv} PIV (burned/destroyed)`);
+        lines.push("");
+      }
+
+      let proposals = gov.proposals;
+      if (filter === "passing") proposals = proposals.filter((p) => p.status === "passing");
+      else if (filter === "failing") proposals = proposals.filter((p) => p.status === "failing");
+
+      if (proposals.length > 0) {
+        lines.push(`## Active Proposals (${proposals.length})`);
+        lines.push("");
+
+        for (const p of proposals) {
+          const status = p.status === "passing" ? "PASSING" : "FAILING";
+          const fundedTag = p.funded ? " (Funded)" : "";
+          lines.push(`### ${p.name} — ${status}${fundedTag}`);
+          lines.push(`- **Votes:** ${p.yesVotes} Yes / ${p.noVotes} No (${p.netYesPercent}% net yes)`);
+          lines.push(`- **Monthly Payment:** ${p.monthlyPaymentPiv.toLocaleString()} PIV (~$${p.monthlyPaymentUsd.toLocaleString()})`);
+          if (p.totalPaymentPiv > p.monthlyPaymentPiv) {
+            lines.push(`- **Total Budget:** ${p.totalPaymentPiv.toLocaleString()} PIV`);
+          }
+          if (p.installmentsRemaining > 0) {
+            lines.push(`- **Installments Remaining:** ${p.installmentsRemaining}`);
+          }
+          if (p.budgetPercent) lines.push(`- **Budget Usage:** ${p.budgetPercent}%`);
+          if (p.url) lines.push(`- **Details:** ${p.url}`);
+          lines.push("");
+        }
+      } else {
+        lines.push("No proposals found matching the filter.");
+      }
+
+      lines.push("---");
+      lines.push(`Source: ${gov.source} | ${gov.timestamp}${gov.cacheHit ? " (cached)" : ""}`);
+
+      return {
+        content: [{ type: "text" as const, text: lines.join("\n") }],
+      };
+    } catch (err) {
+      return {
+        content: [{
+          type: "text" as const,
+          text: `Failed to fetch PIVX governance data: ${err instanceof Error ? err.message : String(err)}. The tool scrapes pivx.org/proposals directly — the site may be temporarily unreachable.`,
+        }],
+      };
     }
   },
 );

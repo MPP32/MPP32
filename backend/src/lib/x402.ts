@@ -2,77 +2,248 @@ import type { Context } from 'hono'
 import { env } from '../env.js'
 import { logger } from './mpp.js'
 
-export const SOLANA_NETWORK = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'
+// ─────────────────────────────────────────────────────────────────────────────
+// Network configuration
+//
+// The CAIP-2 network ID lives in `env.X402_NETWORK`, defaulting to Solana
+// mainnet. `SOLANA_NETWORK` is re-exported so the OpenAPI document, the A2A
+// agent card, and any other advertisement read a single source of truth.
+// One env var changes every announcement.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const SOLANA_NETWORK = env.X402_NETWORK
 export const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
 
-// The facilitator pays the SOL transaction fee on Solana, so its address has
-// to appear as `extra.feePayer` in every challenge we issue. We discover this
-// once via the facilitator's `/supported` endpoint and cache it. If that
-// lookup fails at startup, we fall back to the public Coinbase-run mainnet
-// fee-payer (documented at https://x402.org/facilitator).
-//
-// All access goes through `getSvmFeePayer()`, which kicks off the warm-up
-// fetch on first call. We do not block server startup on the lookup — if the
-// facilitator is slow, every challenge served before the response lands uses
-// the hardcoded fallback, which the facilitator accepts because it IS the
-// fallback's owner.
-const HARDCODED_FACILITATOR_FEE_PAYER = '7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs'
-let cachedSvmFeePayer: string | null = null
-let feePayerLookupInFlight: Promise<void> | null = null
+// PayAI mainnet fee-payer, used only when a probe has not yet landed at the
+// instant of the first inbound request. Once the startup validator completes
+// (which happens before the server accepts traffic), the cached value from
+// the facilitator's /supported response takes over.
+const PAYAI_MAINNET_FEE_PAYER_FALLBACK = '2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4'
 
 interface FacilitatorSupportedResponse {
-  // Coinbase's facilitator returns either { kinds: [{ scheme, network, extra: { feePayer } }] }
-  // or { feePayers: { [network]: string } }. We tolerate both shapes — and
-  // ignore the rest — so the lookup is liberal in what it accepts.
+  // Tolerates both shapes the ecosystem ships today:
+  //   { kinds: [{ scheme, network, extra: { feePayer } }] }   (PayAI / Coinbase CDP)
+  //   { feePayers: { [network]: string } }                     (older clients)
   kinds?: Array<{ scheme?: string; network?: string; extra?: { feePayer?: string } }>
   feePayers?: Record<string, string>
 }
 
-async function fetchSvmFeePayer(): Promise<void> {
-  const url = `${env.X402_FACILITATOR_URL.replace(/\/+$/, '')}/supported`
+interface ProbeOk {
+  ok: true
+  url: string
+  feePayer: string
+  supportedNetworks: string[]
+}
+interface ProbeFail {
+  ok: false
+  url: string
+  reason: string
+  supportedNetworks: string[]
+}
+type ProbeResult = ProbeOk | ProbeFail
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Facilitator probe
+//
+// Calls a facilitator's `/supported` endpoint, then verifies it advertises
+// `env.X402_NETWORK`. Returns the network's fee-payer on success, an error
+// reason on failure. Does NOT throw — callers decide how to react.
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function probeFacilitator(url: string): Promise<ProbeResult> {
+  const trimmed = url.replace(/\/+$/, '')
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) })
+    const res = await fetch(`${trimmed}/supported`, { signal: AbortSignal.timeout(10_000) })
     if (!res.ok) {
-      logger.warn('x402 facilitator /supported returned non-OK', { status: res.status })
-      return
+      return { ok: false, url: trimmed, reason: `HTTP ${res.status} from /supported`, supportedNetworks: [] }
     }
     const body = (await res.json()) as FacilitatorSupportedResponse
-    // Prefer an explicit map if the facilitator exposes one.
-    const fromMap = body.feePayers?.[SOLANA_NETWORK]
-    if (fromMap && typeof fromMap === 'string') {
-      cachedSvmFeePayer = fromMap
-      logger.info('x402 facilitator feePayer cached', { network: SOLANA_NETWORK, feePayer: fromMap, source: 'feePayers-map' })
-      return
+    const supportedNetworks: string[] = []
+
+    // Map shape (older facilitators):
+    if (body.feePayers && typeof body.feePayers === 'object') {
+      for (const net of Object.keys(body.feePayers)) supportedNetworks.push(net)
+      const direct = body.feePayers[env.X402_NETWORK]
+      if (direct && typeof direct === 'string') {
+        return { ok: true, url: trimmed, feePayer: direct, supportedNetworks }
+      }
     }
-    const fromKinds = body.kinds?.find(
-      (k) => k.scheme === 'exact' && k.network === SOLANA_NETWORK && typeof k.extra?.feePayer === 'string',
-    )?.extra?.feePayer
-    if (fromKinds) {
-      cachedSvmFeePayer = fromKinds
-      logger.info('x402 facilitator feePayer cached', { network: SOLANA_NETWORK, feePayer: fromKinds, source: 'kinds' })
-      return
+    // Kinds shape (current PayAI / CDP):
+    if (Array.isArray(body.kinds)) {
+      for (const k of body.kinds) {
+        if (k.network) supportedNetworks.push(k.network)
+      }
+      const exact = body.kinds.find(
+        (k) =>
+          k.scheme === 'exact' &&
+          k.network === env.X402_NETWORK &&
+          typeof k.extra?.feePayer === 'string',
+      )
+      if (exact?.extra?.feePayer) {
+        return { ok: true, url: trimmed, feePayer: exact.extra.feePayer, supportedNetworks }
+      }
     }
-    logger.warn('x402 facilitator /supported did not advertise a feePayer for', { network: SOLANA_NETWORK })
+
+    return {
+      ok: false,
+      url: trimmed,
+      reason: `facilitator does not advertise scheme="exact" for network="${env.X402_NETWORK}"`,
+      supportedNetworks,
+    }
   } catch (err) {
-    logger.warn('x402 facilitator /supported lookup failed', { error: String(err) })
+    return {
+      ok: false,
+      url: trimmed,
+      reason: err instanceof Error ? err.message : String(err),
+      supportedNetworks: [],
+    }
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Active facilitator state
+//
+// `activeFacilitator` is the URL we hit for /verify and /settle. The startup
+// validator picks it (primary if it supports our network, else fallback).
+// `failoverFacilitator` is the secondary URL, tried only on request-time
+// transport failures against the primary.
+//
+// `cachedFeePayer` is what we drop into outgoing challenges' `extra.feePayer`.
+// It is updated whenever a probe succeeds.
+// ─────────────────────────────────────────────────────────────────────────────
+
+let activeFacilitator: string = env.X402_FACILITATOR_URL.replace(/\/+$/, '')
+let failoverFacilitator: string | null =
+  env.X402_FACILITATOR_FALLBACK_URL && env.X402_FACILITATOR_FALLBACK_URL !== env.X402_FACILITATOR_URL
+    ? env.X402_FACILITATOR_FALLBACK_URL.replace(/\/+$/, '')
+    : null
+let cachedFeePayer: string | null = null
 
 export function getSvmFeePayer(): string {
-  if (cachedSvmFeePayer) return cachedSvmFeePayer
-  if (!feePayerLookupInFlight) {
-    // Kick off the lookup but do not await — return the fallback immediately.
-    // The next request after the lookup completes will benefit.
-    feePayerLookupInFlight = fetchSvmFeePayer().catch(() => undefined)
-  }
-  return HARDCODED_FACILITATOR_FEE_PAYER
+  return cachedFeePayer ?? PAYAI_MAINNET_FEE_PAYER_FALLBACK
 }
 
-// Warm the cache at module load so the first challenge served includes the
-// correct facilitator-advertised fee-payer when possible.
-void (async () => {
-  await fetchSvmFeePayer()
-})()
+export function getActiveFacilitator(): string {
+  return activeFacilitator
+}
+
+export function getFailoverFacilitator(): string | null {
+  return failoverFacilitator
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Startup validator
+//
+// Probes the primary facilitator and (if needed) the fallback before the
+// server accepts traffic. Promotes whichever one advertises support for the
+// configured network. In production, exits non-zero if neither qualifies so
+// the platform never serves challenges it cannot settle. In development,
+// prints the same banner but keeps the process alive for offline iteration.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function validateFacilitatorAtBoot(): Promise<void> {
+  if (env.X402_ENABLED !== 'true') {
+    console.log('ℹ️  x402 disabled — skipping facilitator boot probe')
+    return
+  }
+
+  const isProduction = env.NODE_ENV === 'production'
+  const primary = await probeFacilitator(env.X402_FACILITATOR_URL)
+
+  if (primary.ok) {
+    activeFacilitator = primary.url
+    cachedFeePayer = primary.feePayer
+    console.log(
+      `✅ x402 facilitator validated: ${primary.url} supports ${env.X402_NETWORK} (feePayer: ${primary.feePayer.slice(0, 8)}…)`,
+    )
+    // Still probe the failover so we have a confirmed alternate before we
+    // actually need it. Best-effort — don't block startup on failover health.
+    if (failoverFacilitator && failoverFacilitator !== primary.url) {
+      probeFacilitator(failoverFacilitator)
+        .then((fb) => {
+          if (fb.ok) {
+            console.log(
+              `✅ x402 fallback facilitator confirmed: ${fb.url} also supports ${env.X402_NETWORK}`,
+            )
+          } else {
+            console.warn(
+              `⚠️  x402 fallback facilitator (${fb.url}) does not support ${env.X402_NETWORK}: ${fb.reason}. ` +
+                `Primary is healthy so this is non-fatal, but you have no redundancy.`,
+            )
+            failoverFacilitator = null
+          }
+        })
+        .catch(() => {
+          failoverFacilitator = null
+        })
+    }
+    return
+  }
+
+  // Primary failed — try the fallback as the active.
+  logger.warn('x402 primary facilitator probe failed', {
+    url: primary.url,
+    reason: primary.reason,
+    supported: primary.supportedNetworks,
+  })
+
+  if (failoverFacilitator) {
+    const fb = await probeFacilitator(failoverFacilitator)
+    if (fb.ok) {
+      activeFacilitator = fb.url
+      cachedFeePayer = fb.feePayer
+      failoverFacilitator = null // already promoted; no further failover
+      console.warn(
+        `⚠️  x402 PRIMARY facilitator (${primary.url}) failed probe: ${primary.reason}. ` +
+          `Promoted fallback ${fb.url} to active (supports ${env.X402_NETWORK}, feePayer: ${fb.feePayer.slice(0, 8)}…).`,
+      )
+      return
+    }
+    logger.error('x402 fallback facilitator probe ALSO failed', {
+      url: fb.url,
+      reason: fb.reason,
+      supported: fb.supportedNetworks,
+    })
+  }
+
+  // Neither primary nor fallback advertises the configured network. Refuse
+  // the boot in production so settlement reliability is a hard guarantee at
+  // process start, not a runtime accident.
+  const banner = [
+    '',
+    '╔══════════════════════════════════════════════════════════════════════╗',
+    '║  No x402 facilitator advertises support for the configured network  ║',
+    '╚══════════════════════════════════════════════════════════════════════╝',
+    '',
+    `   Configured network: ${env.X402_NETWORK}`,
+    `   Primary URL:        ${env.X402_FACILITATOR_URL}`,
+    `   Fallback URL:       ${env.X402_FACILITATOR_FALLBACK_URL ?? '(none)'}`,
+    '',
+    '   Resolve one of:',
+    `     - Set X402_FACILITATOR_URL to a facilitator that supports ${env.X402_NETWORK}`,
+    '     - Set X402_NETWORK to a network the configured facilitator supports',
+    '     - Set X402_ENABLED=false to run without x402 settlement',
+    '',
+    '   PayAI (https://facilitator.payai.network) advertises Solana mainnet',
+    `   (solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp) with no API key required.`,
+    '',
+  ].join('\n')
+
+  if (isProduction) {
+    console.error(banner)
+    process.exit(1)
+  } else {
+    console.warn(banner)
+    console.warn(
+      '   (Development mode — keeping server alive so you can iterate. ' +
+        'This would fatal-exit in production.)',
+    )
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Public surface used by the request path
+// ─────────────────────────────────────────────────────────────────────────────
 
 export function isX402Enabled(): boolean {
   return env.X402_ENABLED === 'true' && !!env.X402_RECIPIENT_ADDRESS
@@ -103,7 +274,7 @@ export interface PaymentRequirements {
 function buildRequirements(price: string, recipientAddress: string, resource: string): PaymentRequirements {
   return {
     scheme: 'exact',
-    network: SOLANA_NETWORK,
+    network: env.X402_NETWORK,
     maxAmountRequired: String(Math.ceil(parseFloat(price) * 1_000_000)),
     resource,
     description: `MPP32 API access — $${price} USDC`,
@@ -112,13 +283,9 @@ function buildRequirements(price: string, recipientAddress: string, resource: st
     maxTimeoutSeconds: 60,
     asset: USDC_MINT,
     extra: {
-      // Required by the x402 `exact` SVM scheme: the facilitator's fee-payer
-      // address. The client uses this to build a transaction the facilitator
-      // can settle (the facilitator signs as feePayer; the client signs as
-      // the token-account authority).
+      // Facilitator's fee-payer per the x402 `exact` SVM scheme. Resolved at
+      // boot by validateFacilitatorAtBoot() against the active facilitator.
       feePayer: getSvmFeePayer(),
-      // USDC decimals — clients should default to 6 when missing, but we send
-      // it explicitly so that nothing depends on the default.
       decimals: 6,
     },
   }
@@ -148,6 +315,7 @@ export interface X402EnvelopeVerifyResult {
   payer?: string
   envelope?: unknown
   requirements?: PaymentRequirements
+  facilitatorUsed?: string
 }
 
 export interface X402SettleResult {
@@ -157,6 +325,7 @@ export interface X402SettleResult {
   network?: string
   error?: string
   settleResponse?: Record<string, unknown>
+  facilitatorUsed?: string
 }
 
 function parseAndValidateEnvelope(
@@ -180,8 +349,11 @@ function parseAndValidateEnvelope(
   if (e.scheme !== 'exact') {
     return { ok: false, error: `Only the "exact" scheme is supported, got "${e.scheme}"` }
   }
-  if (e.network !== SOLANA_NETWORK) {
-    return { ok: false, error: `Payment must be on ${SOLANA_NETWORK}, got "${e.network}"` }
+  if (e.network !== env.X402_NETWORK) {
+    return {
+      ok: false,
+      error: `Payment must be on ${env.X402_NETWORK}, got "${e.network}"`,
+    }
   }
   return { ok: true, envelope: e }
 }
@@ -194,6 +366,50 @@ function validatePriceAndRecipient(
   if (isNaN(expectedAmountMicro) || expectedAmountMicro <= 0) return 'Invalid price configuration'
   if (!recipientAddress || recipientAddress.length < 32) return 'Invalid recipient address configuration'
   return null
+}
+
+// Call a facilitator endpoint with per-request failover: primary first; if it
+// errors at the transport layer or returns a 5xx, retry against the failover.
+// Per-request state (which facilitator handled `/verify`) is returned so the
+// caller can pin `/settle` to the same one.
+async function callFacilitator(
+  path: '/verify' | '/settle',
+  body: unknown,
+  preferred?: string,
+): Promise<{ ok: true; data: Record<string, unknown>; facilitatorUsed: string } | { ok: false; error: string; facilitatorUsed: string }> {
+  const order: string[] = []
+  if (preferred) order.push(preferred)
+  if (!order.includes(activeFacilitator)) order.push(activeFacilitator)
+  if (failoverFacilitator && !order.includes(failoverFacilitator)) order.push(failoverFacilitator)
+
+  let lastErr = 'no facilitator configured'
+  let lastUrl = order[0] ?? activeFacilitator
+  for (const url of order) {
+    lastUrl = url
+    try {
+      const res = await fetch(`${url}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(15_000),
+      })
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        lastErr = `Facilitator ${path} returned ${res.status}: ${text.slice(0, 200)}`
+        // Only failover on 5xx; 4xx is "your request was rejected" — failover
+        // would just produce the same rejection.
+        if (res.status >= 500) continue
+        return { ok: false, error: lastErr, facilitatorUsed: url }
+      }
+      const data = (await res.json().catch(() => ({}))) as Record<string, unknown>
+      return { ok: true, data, facilitatorUsed: url }
+    } catch (err) {
+      lastErr = err instanceof Error ? err.message : String(err)
+      // Transport-layer error → try the next facilitator.
+      continue
+    }
+  }
+  return { ok: false, error: lastErr, facilitatorUsed: lastUrl }
 }
 
 export async function verifyX402Envelope(
@@ -210,77 +426,70 @@ export async function verifyX402Envelope(
 
   const requirements = buildRequirements(price, recipientAddress, resource)
 
-  try {
-    const verifyRes = await fetch(`${env.X402_FACILITATOR_URL}/verify`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ payload: parsed.envelope, paymentRequirements: requirements }),
-      signal: AbortSignal.timeout(10_000),
-    })
+  const call = await callFacilitator('/verify', {
+    payload: parsed.envelope,
+    paymentRequirements: requirements,
+  })
+  if (!call.ok) {
+    logger.warn('x402 verify failed', { error: call.error, facilitator: call.facilitatorUsed })
+    return { verified: false, error: call.error, facilitatorUsed: call.facilitatorUsed }
+  }
 
-    if (!verifyRes.ok) {
-      const text = await verifyRes.text().catch(() => '')
-      logger.warn('x402 verify failed', { status: verifyRes.status, body: text })
-      return { verified: false, error: `Facilitator verify returned ${verifyRes.status}: ${text.slice(0, 200)}` }
-    }
-
-    const verifyResult = (await verifyRes.json()) as {
-      isValid?: boolean
-      valid?: boolean
-      payer?: string
-      invalidReason?: string
-    }
-    const isValid = verifyResult.isValid ?? verifyResult.valid ?? false
-    if (!isValid) {
-      return { verified: false, error: verifyResult.invalidReason ?? 'Payment verification failed at facilitator' }
-    }
-
+  const verifyResult = call.data as { isValid?: boolean; valid?: boolean; payer?: string; invalidReason?: string }
+  const isValid = verifyResult.isValid ?? verifyResult.valid ?? false
+  if (!isValid) {
     return {
-      verified: true,
-      payer: verifyResult.payer,
-      envelope: parsed.envelope,
-      requirements,
+      verified: false,
+      error: verifyResult.invalidReason ?? 'Payment verification failed at facilitator',
+      facilitatorUsed: call.facilitatorUsed,
     }
-  } catch (err) {
-    logger.error('x402 envelope verification error', { error: String(err) })
-    return { verified: false, error: String(err) }
+  }
+
+  return {
+    verified: true,
+    payer: verifyResult.payer,
+    envelope: parsed.envelope,
+    requirements,
+    facilitatorUsed: call.facilitatorUsed,
   }
 }
 
 export async function settleX402Payment(
   envelope: unknown,
   requirements: PaymentRequirements,
+  preferredFacilitator?: string,
 ): Promise<X402SettleResult> {
-  try {
-    const settleRes = await fetch(`${env.X402_FACILITATOR_URL}/settle`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ payload: envelope, paymentRequirements: requirements }),
-      signal: AbortSignal.timeout(15_000),
-    })
+  const call = await callFacilitator(
+    '/settle',
+    { payload: envelope, paymentRequirements: requirements },
+    preferredFacilitator,
+  )
+  if (!call.ok) {
+    logger.warn('x402 settle failed', { error: call.error, facilitator: call.facilitatorUsed })
+    return { settled: false, error: call.error, facilitatorUsed: call.facilitatorUsed }
+  }
+  const settleJson = call.data
+  const txSignature =
+    (settleJson.txHash as string | undefined) ??
+    (settleJson.transaction as string | undefined) ??
+    (settleJson.signature as string | undefined) ??
+    undefined
+  const network =
+    (settleJson.networkId as string | undefined) ??
+    (settleJson.network as string | undefined) ??
+    env.X402_NETWORK
 
-    if (!settleRes.ok) {
-      const text = await settleRes.text().catch(() => '')
-      logger.warn('x402 settle failed', { status: settleRes.status, body: text })
-      return { settled: false, error: `Facilitator settle returned ${settleRes.status}: ${text.slice(0, 200)}` }
-    }
-
-    const settleJson = (await settleRes.json().catch(() => ({}))) as Record<string, unknown>
-    const txSignature =
-      (settleJson.txHash as string | undefined) ??
-      (settleJson.transaction as string | undefined) ??
-      (settleJson.signature as string | undefined) ??
-      undefined
-    const network =
-      (settleJson.networkId as string | undefined) ??
-      (settleJson.network as string | undefined) ??
-      SOLANA_NETWORK
-
-    logger.info('x402 payment settled', { txSignature, resource: requirements.resource })
-    return { settled: true, txSignature, network, settleResponse: settleJson }
-  } catch (err) {
-    logger.error('x402 settlement error', { error: String(err) })
-    return { settled: false, error: String(err) }
+  logger.info('x402 payment settled', {
+    txSignature,
+    resource: requirements.resource,
+    facilitator: call.facilitatorUsed,
+  })
+  return {
+    settled: true,
+    txSignature,
+    network,
+    settleResponse: settleJson,
+    facilitatorUsed: call.facilitatorUsed,
   }
 }
 
@@ -295,7 +504,11 @@ export async function verifyX402Payment(
     return { verified: false, error: envelopeResult.error }
   }
 
-  const settleResult = await settleX402Payment(envelopeResult.envelope!, envelopeResult.requirements!)
+  const settleResult = await settleX402Payment(
+    envelopeResult.envelope!,
+    envelopeResult.requirements!,
+    envelopeResult.facilitatorUsed,
+  )
   if (!settleResult.settled) {
     return { verified: false, error: settleResult.error }
   }
@@ -305,6 +518,7 @@ export async function verifyX402Payment(
     price,
     recipient: recipientAddress,
     txSignature: settleResult.txSignature,
+    facilitator: settleResult.facilitatorUsed,
   })
   return {
     verified: true,

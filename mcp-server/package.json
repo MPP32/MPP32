@@ -1,6 +1,6 @@
 {
   "name": "mpp32-mcp-server",
-  "version": "1.3.1",
+  "version": "1.5.0",
   "mcpName": "io.github.MPP32/mpp32-mcp-server",
   "description": "Payment layer for AI agents. One MCP, five protocols, thousands of paid APIs your agent can call.",
   "type": "module",
@@ -52,7 +52,10 @@
     "crypto",
     "defi",
     "token-intelligence",
-    "api-marketplace"
+    "api-marketplace",
+    "pivx",
+    "governance",
+    "dao"
   ],
   "license": "MIT",
   "author": "MPP32 <admin@mpp32.org> (https://mpp32.org)",
@@ -73,6 +76,7 @@
     "@solana-program/token": "^0.13.0",
     "@solana/kit": "^6.9.0",
     "bs58": "^6.0.0",
+    "cheerio": "^1.2.0",
     "tweetnacl": "^1.0.3",
     "viem": "^2.48.11",
     "zod": "^3.23.0"

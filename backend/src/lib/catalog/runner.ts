@@ -3,8 +3,10 @@ import type { Crawler, CatalogItem } from './types.js'
 import { x402BazaarCrawler } from './crawlers/x402-bazaar.js'
 import { mcpRegistryCrawler } from './crawlers/mcp-registry.js'
 import { curatedSeedCrawler } from './crawlers/curated-seed.js'
+import { replicateCrawler } from './crawlers/replicate.js'
+import { huggingfaceCrawler } from './crawlers/huggingface.js'
 
-const CRAWLERS: Crawler[] = [curatedSeedCrawler, x402BazaarCrawler, mcpRegistryCrawler]
+const CRAWLERS: Crawler[] = [curatedSeedCrawler, x402BazaarCrawler, mcpRegistryCrawler, replicateCrawler, huggingfaceCrawler]
 
 function getCrawler(name: string): Crawler | undefined {
   return CRAWLERS.find((c) => c.source === name)
@@ -51,9 +53,13 @@ async function persistItem(source: string, item: CatalogItem): Promise<'added' |
   }
 
   if (existing) {
+    const updateData: any = { ...data, slug: existing.slug }
+    if (item.healthStatus && (existing.healthStatus === 'unknown' || existing.healthStatus === 'broken')) {
+      updateData.healthStatus = item.healthStatus
+    }
     await prisma.externalService.update({
       where: { id: existing.id },
-      data: { ...data, slug: existing.slug }, // preserve original slug to avoid uniqueness conflict
+      data: updateData,
     })
     return 'updated'
   }
@@ -65,7 +71,9 @@ async function persistItem(source: string, item: CatalogItem): Promise<'added' |
     slug = `${item.slug}-${item.sourceId.slice(0, 8)}`
   }
 
-  await prisma.externalService.create({ data: { ...data, slug } })
+  const createData: any = { ...data, slug }
+  if (item.healthStatus) createData.healthStatus = item.healthStatus
+  await prisma.externalService.create({ data: createData })
   return 'added'
 }
 
