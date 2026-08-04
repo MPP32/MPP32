@@ -26,14 +26,14 @@ MPP32 replaces all of that. Your agent asks for a service by name. The proxy fin
 |:-----|:-------|:-----------|:--------|:-------------|
 | x402 | Production | USDC | Solana mainnet | PayAI facilitator with Coinbase CDP failover |
 | x402 | Production | USDC | Base | PayAI facilitator with Coinbase CDP failover |
-| Tempo | Envelope wired, disabled in production | pathUSD | Ethereum L2 | mppx SDK (client signer pending) |
-| ACP | Envelope wired, disabled in production | Checkout session | Multi chain | Database backed flow |
+| Tempo | Production | pathUSD | Ethereum L2 | mppx SDK, signers in the MPP32 SDK and MCP server |
+| AGTP | Production | Agent certificates | Chain agnostic | HMAC SHA256 |
 | AP2 | Envelope wired, disabled in production | Verifiable credentials | Chain agnostic | ECDSA P-256 |
-| AGTP | Envelope wired, disabled in production | Agent certificates | Chain agnostic | HMAC SHA256 |
+| ACP | Envelope wired, disabled in production | Checkout session | Multi chain | Database backed flow |
 
 The backend refuses to boot when its configured facilitator does not advertise the configured network, so settlement reliability is a guarantee at process start. A CI integration test runs against the live facilitator on every push to keep the env defaults honest. Per request failover routes verify and settle to the backup facilitator on transport errors.
 
-The proxy implements every envelope and verifies challenges in tests, but only x402 has a tested end to end client flow in this MCP today. The other rails light up as their signers ship.
+x402, Tempo, and AGTP have tested end to end client flows and are live in production. AP2 stays gated off until a trusted-issuer allowlist is configured — without it, mandate verification fails closed and every request would be rejected. ACP stays gated off until its checkout session client flow is verified end to end.
 
 ## Try it free in 30 seconds
 
@@ -94,7 +94,7 @@ See the 402 challenge with every protocol header:
 curl -i https://mpp32.org/api/proxy/mpp32-intelligence
 ```
 
-The response will include the x402 `Payment-Required` envelope and an `X-Payment-Methods: x402` advertisement. Tempo, ACP, AP2, and AGTP challenge headers are gated off in production until each protocol's client signer ships; flip the matching `*_ENABLED` env var in `backend/.env` to test them locally.
+The response will include the x402 `Payment-Required` envelope, the Tempo `WWW-Authenticate` challenge, and an `X-Payment-Methods` advertisement listing every enabled rail (`tempo, x402, agtp`). AP2 and ACP stay gated off in production; flip the matching `*_ENABLED` env var in `backend/.env` to test them locally.
 
 Read the full OpenAPI spec with per endpoint protocol and pricing detail:
 
