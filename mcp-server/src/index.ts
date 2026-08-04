@@ -5,7 +5,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { signX402Payment } from "./x402-signers.js";
 
-const SERVER_VERSION = "1.5.0";
+const SERVER_VERSION = "1.8.0";
 
 // ── Env loading: trim and sanitize aggressively ─────────────────────────────
 // Copy-paste from Claude Desktop / Cursor / Windsurf JSON config UIs frequently
@@ -209,6 +209,14 @@ interface FederatedService {
   primaryProtocol?: string;
   network?: string | null;
   tags?: string[];
+  // Server-authoritative callability. When present, this reflects whether the
+  // service can actually be reached through call_mpp32_endpoint right now
+  // (e.g. native services pending endpoint verification are NOT callable, even
+  // though they are "native"). Falls back to the URL heuristic when absent.
+  callable?: boolean;
+  callableReason?: string | null;
+  note?: string | null;
+  m32Required?: number;
 }
 
 interface FederatedServicesResponse {
@@ -222,6 +230,32 @@ interface FederatedServicesResponse {
     hint?: string;
     protocols: string[];
   };
+}
+
+interface RouteIntentResponse {
+  data: {
+    intent: string;
+    keywordsExtracted: string[];
+    totalConsidered: number;
+    candidates: Array<{
+      slug: string;
+      source: string;
+      name: string;
+      description: string | null;
+      category: string | null;
+      price: number | null;
+      verified: boolean;
+      healthStatus: string;
+      callable: boolean;
+      callableReason: string | null;
+      protocols: string[];
+      matchedKeywords: string[];
+      overBudget: boolean;
+      score: number;
+    }>;
+    hint: string;
+  };
+  error?: { message: string; code: string };
 }
 
 interface ExecuteResponse {
@@ -262,7 +296,11 @@ const server = new McpServer({
 });
 
 function buildHeaders(extra: Record<string, string> = {}): Record<string, string> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = {
+    // Identifies this surface to the backend's usage tracking so MCP traffic
+    // can be measured separately from web/SDK/direct-API traffic.
+    "X-MPP32-Client": `mcp-server/${SERVER_VERSION}`,
+  };
   for (const [k, v] of Object.entries(extra)) {
     headers[k] = safeHeaderValue(k, v);
   }
@@ -273,11 +311,32 @@ function buildHeaders(extra: Record<string, string> = {}): Record<string, string
 }
 
 function isHttpCallable(svc: FederatedService): boolean {
+  // Prefer the server's authoritative `callable` flag when provided. The server
+  // knows things the URL cannot tell us — e.g. a native service that hasn't
+  // completed endpoint verification (the proxy will 403 it) or an M32
+  // token-gated service that needs an on-chain balance proof.
+  if (typeof svc.callable === "boolean") return svc.callable;
   if (svc.source === "native") return true;
   const url = svc.endpointUrl ?? "";
   if (!url) return false;
   if (url.startsWith("npx://") || url.startsWith("stdio://")) return false;
   return /^https?:\/\//.test(url);
+}
+
+// Human-readable explanation for why a service is not callable through this MCP.
+function notCallableLabel(svc: FederatedService): string {
+  switch (svc.callableReason) {
+    case "pending_verification":
+      return "No — provider hasn't completed endpoint verification yet";
+    case "m32_token_gated":
+      return svc.m32Required
+        ? `Token-gated — hold ${svc.m32Required.toLocaleString()}+ M32 and use the dedicated tool`
+        : "Token-gated — requires M32 holdings via the dedicated tool";
+    case "listing_only":
+      return "No — listing only";
+    default:
+      return "No — listing only";
+  }
 }
 
 // ── Tool 0: get_mpp32_diagnostics ───────────────────────────────────────────
@@ -347,8 +406,10 @@ server.tool(
       `- Federated service execution: ${AGENT_KEY ? "yes" : "no — set MPP32_AGENT_KEY"}`,
       `- x402 (USDC on Solana) payment: ${SOLANA_PRIVATE_KEY ? "yes" : "no — set MPP32_SOLANA_PRIVATE_KEY"}`,
       `- x402 (USDC on Base/EVM) payment: ${PRIVATE_KEY ? "yes" : "no — set MPP32_PRIVATE_KEY"}`,
+      `- M32 holder pricing (SIWS verified): ${siwsVerifiedAddress ? `yes — ${siwsTier} tier, ${siwsDiscountPercent}% off every paid query` : (AGENT_KEY && SOLANA_PRIVATE_KEY ? "pending — auto verification runs once at startup" : "no — set MPP32_AGENT_KEY + MPP32_SOLANA_PRIVATE_KEY")}`,
       ``,
-      `**Ready to pay end-to-end:** ${readyToPay ? "YES — try `get_solana_token_intelligence` with token=\"M32\" to confirm." : "NO — see the missing items above. Meanwhile, you can still call `try_solana_token_intelligence_free` (10/min/IP, no keys required) to evaluate the oracle."}`,
+      `**Ready to use:** ${AGENT_KEY ? "YES — you have 10 FREE Intelligence Oracle calls/day. Try `get_solana_token_intelligence` with token=\"M32\" now." : "SET MPP32_AGENT_KEY to get 10 FREE calls/day. Get one at " + API_URL + "/agent-console."}`,
+      `**Ready to pay (after free tier):** ${readyToPay ? "YES — x402 signing configured." : "NO — set MPP32_SOLANA_PRIVATE_KEY (or MPP32_PRIVATE_KEY for EVM) to pay after free tier exhausted."}`,
       ``,
       `**If a variable shows NOT SET but you set it in claude_desktop_config.json:**`,
       `1. Confirm the file path Claude Desktop actually reads:`,
@@ -482,7 +543,7 @@ server.tool(
           `- **Category:** ${s.category ?? "—"}`,
           `- **Price:** ${priceLabel}`,
           `- **Protocols:** ${protos}`,
-          `- **Callable via this MCP:** ${callable ? "Yes — use `call_mpp32_endpoint`" : "No — listing only"}`,
+          `- **Callable via this MCP:** ${callable ? "Yes — use `call_mpp32_endpoint`" : notCallableLabel(s)}`,
           s.description ? `- **Description:** ${s.description}` : null,
           s.endpointUrl && !callable ? `- **Install / direct URL:** \`${s.endpointUrl}\`` : null,
           s.websiteUrl ? `- **Website:** ${s.websiteUrl}` : null,
@@ -520,6 +581,94 @@ server.tool(
           {
             type: "text" as const,
             text: `Failed to fetch MPP32 services: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        ],
+      };
+    }
+  },
+);
+
+server.tool(
+  "find_mpp32_service",
+  "Describe what you need in plain language instead of browsing the 4,500+ entry catalog yourself. Returns a ranked shortlist — ranked by keyword relevance, catalog health status (broken listings are excluded automatically), verification, and whether the price actually fits your stated budget. Use this before `list_mpp32_services` when you have a task in mind ('check if this wallet is a rug', 'generate a product image', 'get real-time SOL price') rather than a category to browse. The top result's slug is ready to pass straight to `call_mpp32_endpoint`.",
+  {
+    intent: z
+      .string()
+      .min(3)
+      .describe("What you're trying to do, in plain language, e.g. 'check if this wallet is a rug pull risk'."),
+    budgetUsd: z
+      .number()
+      .nonnegative()
+      .optional()
+      .describe("Max price per call you're willing to pay. Candidates over budget are demoted or excluded."),
+    category: z
+      .string()
+      .optional()
+      .describe("Optionally narrow to a known category slug (e.g. 'token-intelligence', 'image-generation')."),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(20)
+      .optional()
+      .describe("Max candidates to return (default 5, max 20)."),
+  },
+  async ({ intent, budgetUsd, category, limit }) => {
+    try {
+      const url = new URL("/api/agent/route", API_URL);
+      url.searchParams.set("intent", intent);
+      if (budgetUsd !== undefined) url.searchParams.set("maxPrice", String(budgetUsd));
+      if (category) url.searchParams.set("category", category);
+      url.searchParams.set("limit", String(limit ?? 5));
+
+      const res = await fetchWithTimeout(url.toString(), { headers: buildHeaders() });
+      const json = (await res.json()) as RouteIntentResponse;
+      if (!res.ok) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Error routing intent: HTTP ${res.status} ${json.error?.message ?? res.statusText}`,
+            },
+          ],
+        };
+      }
+
+      const { candidates, keywordsExtracted, totalConsidered, hint } = json.data;
+      if (candidates.length === 0) {
+        return { content: [{ type: "text" as const, text: hint }] };
+      }
+
+      const lines = candidates.map((cand, i) => {
+        const priceLabel = cand.price === null ? "Pay provider directly" : cand.price === 0 ? "Free" : `$${cand.price} per query`;
+        return [
+          `## ${i + 1}. ${cand.name}${cand.verified ? " ✓" : ""} — score ${cand.score.toFixed(1)}`,
+          `- **Slug:** \`${cand.slug}\``,
+          `- **Source:** ${cand.source} | **Health:** ${cand.healthStatus}${cand.overBudget ? " ⚠️ over budget" : ""}`,
+          `- **Price:** ${priceLabel}`,
+          `- **Matched on:** ${cand.matchedKeywords.length > 0 ? cand.matchedKeywords.join(", ") : "(no keyword match — ranked by health/verification/popularity only)"}`,
+          `- **Callable via this MCP:** ${cand.callable ? "Yes — use `call_mpp32_endpoint`" : (cand.callableReason ?? "listing only")}`,
+          cand.description ? `- **Description:** ${cand.description}` : null,
+        ]
+          .filter(Boolean)
+          .join("\n");
+      });
+
+      const header = [
+        `# Intent: "${intent}" — ${candidates.length} ranked match${candidates.length !== 1 ? "es" : ""} (of ${totalConsidered} considered)`,
+        keywordsExtracted.length > 0 ? `**Keywords used:** ${keywordsExtracted.join(", ")}` : `**No keywords extracted from intent — ranked by health/verification/popularity only.**`,
+        ``,
+        `> ${hint}`,
+        ``,
+      ].join("\n");
+
+      return { content: [{ type: "text" as const, text: header + "\n" + lines.join("\n\n") }] };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Failed to route intent: ${err instanceof Error ? err.message : String(err)}`,
           },
         ],
       };
@@ -578,7 +727,7 @@ server.tool(
 
 server.tool(
   "get_solana_token_intelligence",
-  "Get real-time Solana token intelligence from the MPP32 Intelligence Oracle. Returns alpha score (0-100), rug risk assessment, whale activity, smart money signals, 24h pump probability, projected ROI ranges, and aggregated DexScreener/Jupiter/CoinGecko market data. Costs $0.008 per query, paid automatically via x402 (USDC on Solana) or Tempo (pathUSD on Eth L2). M32 token holders receive up to 40% discount once their wallet is signature-verified. Set MPP32_AGENT_KEY in config to attribute calls to your dashboard. **New users with no keys configured: call `try_solana_token_intelligence_free` first** — it returns the same payload, rate-limited to 10/min, no payment or key required.",
+  "Get real-time Solana token intelligence from the MPP32 Intelligence Oracle. Returns alpha score (0-100), rug risk assessment, whale activity, smart money signals, 24h pump probability, projected ROI ranges, and aggregated DexScreener/Jupiter/CoinGecko market data. **FREE TIER: Every agent session gets 10 free calls per day — no wallet, no USDC, no payment setup required.** Just set MPP32_AGENT_KEY. After free tier: $0.008/query paid via x402 (USDC on Solana). M32 token holders receive up to 40% discount.",
   {
     token: z
       .string()
@@ -616,7 +765,7 @@ server.tool(
 
 server.tool(
   "try_solana_token_intelligence_free",
-  "FREE preview of the MPP32 Intelligence Oracle. No payment, no agent key, no Solana private key required. Returns the SAME payload as the paid endpoint (alpha score, rug risk, whale activity, smart money signals, pump probability, market data) for any Solana token. Rate-limited to 10 calls/minute per IP. Use this to evaluate the data quality. Once you're convinced, set MPP32_AGENT_KEY + a payment key and switch to `get_solana_token_intelligence` for unlimited, attributed usage and M32-holder discounts.",
+  "FREE preview of the MPP32 Intelligence Oracle — quick anonymous test, no keys required. Rate-limited to 10 calls/minute per IP. Returns the same payload as the paid endpoint. **Better option: get an MPP32_AGENT_KEY from mpp32.org/agent-console and call `get_solana_token_intelligence` instead — you get 10 FREE attributed calls per day, plus dashboard tracking, before any payment is needed.**",
   {
     token: z
       .string()
@@ -628,7 +777,7 @@ server.tool(
     try {
       const res = await fetchWithTimeout(`${API_URL}/api/intelligence/demo`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: buildHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ token }),
       });
       const text = await res.text();
@@ -638,7 +787,7 @@ server.tool(
         return {
           content: [{
             type: "text" as const,
-            text: `Demo rate limit reached (10 calls/minute per IP). Wait a minute and retry, or set up paid access for unlimited queries:\n\n1. Get an agent key: ${API_URL}/agent-console\n2. Add MPP32_AGENT_KEY + MPP32_SOLANA_PRIVATE_KEY to your MCP config\n3. Call \`get_solana_token_intelligence\` instead — $0.008/query, M32 holders save up to 40%.`,
+            text: `Demo rate limit reached (10 calls/minute per IP). **Better option:** Get a free agent key at ${API_URL}/agent-console → 10 FREE attributed calls/day with dashboard tracking, no payment setup required. After free tier, $0.008/query.`,
           }],
         };
       }
@@ -779,15 +928,92 @@ server.tool(
 );
 
 // ── Tool 7: get_pivx_dao_intelligence ─────────────────────────────────────
-// Self-contained: scrapes pivx.org/proposals + Chainz CryptoID directly.
-// Does NOT depend on any backend endpoint — works for every npm user out of the box.
+// Calls the MPP32 backend's `/api/governance` endpoint, which scrapes
+// pivx.org/proposals + Chainz CryptoID server-side and caches for 5 minutes.
+// Pre-1.7 versions of the MCP did the scrape client-side via cheerio; that
+// pulled 21 transitive packages (including a deprecated whatwg-encoding) into
+// every install for one read-only tool. The backend has served the same
+// payload at /api/governance since 1.4.0 — this just routes through it.
 
-import { fetchPivxGovernance } from "./pivx-provider.js";
-import type { PivxGovernanceData } from "./pivx-provider.js";
+interface PivxProposal {
+  name: string;
+  url: string;
+  status: "passing" | "failing";
+  funded: boolean;
+  netYesPercent: number;
+  yesVotes: number;
+  noVotes: number;
+  monthlyPaymentPiv: number;
+  monthlyPaymentUsd: number;
+  totalPaymentPiv: number;
+  installmentsRemaining: number;
+  totalInstallments: number;
+  budgetPercent: number;
+}
+
+interface PivxNetworkStats {
+  masternodeCount: number;
+  passingThreshold: number;
+  monthlyBudgetPiv: number;
+  monthlyBudgetUsd: number;
+  budgetAllocatedPiv: number;
+  budgetAllocatedUsd: number;
+  budgetAllocatedPercent: number;
+  blockHeight: number;
+  totalSupply: number;
+  circulatingSupply: number;
+}
+
+interface PivxGovernanceData {
+  proposals: PivxProposal[];
+  network: PivxNetworkStats;
+  deflation: {
+    unallocatedPivPerCycle: number;
+    unallocatedPercent: number;
+    annualUnallocatedPiv: number;
+    proposalFeeBurnPiv: number;
+    effectiveInflationReduction: string;
+  };
+  timestamp: string;
+  source: string;
+  cacheHit: boolean;
+}
+
+interface PivxGovernanceResponse {
+  data: {
+    proposals: PivxProposal[];
+    network: PivxNetworkStats;
+    deflation: PivxGovernanceData["deflation"];
+    meta: {
+      source: string;
+      timestamp: string;
+      cacheHit: boolean;
+    };
+  };
+}
+
+async function fetchPivxGovernance(): Promise<PivxGovernanceData> {
+  const res = await fetchWithTimeout(`${API_URL}/api/governance`, {
+    timeoutMs: 15_000,
+    headers: buildHeaders({ Accept: "application/json" }),
+  });
+  if (!res.ok) {
+    throw new Error(`MPP32 governance endpoint returned HTTP ${res.status}`);
+  }
+  const { data } = (await res.json()) as PivxGovernanceResponse;
+  return {
+    proposals: data.proposals,
+    network: data.network,
+    deflation: data.deflation,
+    timestamp: data.meta.timestamp,
+    source: data.meta.source,
+    cacheHit: data.meta.cacheHit,
+  };
+}
 
 server.tool(
   "get_pivx_dao_intelligence",
-  "Get real-time PIVX DAO governance intelligence. Returns active budget proposals with masternode voting tallies (Yes/No counts, net yes percentages), budget allocation status, network deflation metrics (unallocated treasury PIV that are never minted), and masternode network health. PIVX is a fully community-governed cryptocurrency where Masternode owners vote on budget proposals every ~30 days (43,200 blocks per superblock cycle, 432,000 PIV max monthly budget). Data scraped live from pivx.org/proposals and the PIVX blockchain via Chainz CryptoID. Cached for 5 minutes. Free — no payment or API key required.",
+  "Get real-time PIVX DAO governance intelligence. Returns active budget proposals with masternode voting tallies (Yes/No counts, net yes percentages), budget allocation status, network deflation metrics (unallocated treasury PIV that are never minted), and masternode network health. PIVX is a fully community-governed cryptocurrency where Masternode owners vote on budget proposals every ~30 days (43,200 blocks per superblock cycle, 432,000 PIV max monthly budget). Data is served by the MPP32 backend, which aggregates pivx.org/proposals and the PIVX blockchain via Chainz CryptoID, and caches for 5 minutes. Free — no payment or API key required.",
   {
     filter: z
       .enum(["all", "passing", "failing"])
@@ -866,7 +1092,7 @@ server.tool(
       return {
         content: [{
           type: "text" as const,
-          text: `Failed to fetch PIVX governance data: ${err instanceof Error ? err.message : String(err)}. The tool scrapes pivx.org/proposals directly — the site may be temporarily unreachable.`,
+          text: `Failed to fetch PIVX governance data: ${err instanceof Error ? err.message : String(err)}. The tool calls ${API_URL}/api/governance — the MPP32 backend or its upstream sources (pivx.org, chainz.cryptoid.info) may be temporarily unreachable.`,
         }],
       };
     }
@@ -1098,10 +1324,9 @@ async function signAndRetry(
     } catch (err) {
       // Fall through to Tempo if available
       if (challenge.wwwAuthenticate && PRIVATE_KEY) {
-        const parsed = parseWwwAuthenticate(challenge.wwwAuthenticate);
         try {
-          const token = await completeTempoPayment(parsed.params, PRIVATE_KEY);
-          paymentHeaders["Authorization"] = `Payment ${token}`;
+          const token = await completeTempoPayment(challenge.wwwAuthenticate, PRIVATE_KEY);
+          paymentHeaders["Authorization"] = token;
           usedProtocol = "pathUSD (Tempo)";
         } catch (tempoErr) {
           return paymentFailedMessage(challenge, "x402+tempo", `${err}; ${tempoErr}`);
@@ -1123,8 +1348,8 @@ async function signAndRetry(
       };
     }
     try {
-      const token = await completeTempoPayment(parsed.params, PRIVATE_KEY);
-      paymentHeaders["Authorization"] = `Payment ${token}`;
+      const token = await completeTempoPayment(challenge.wwwAuthenticate, PRIVATE_KEY);
+      paymentHeaders["Authorization"] = token;
       usedProtocol = "pathUSD (Tempo)";
     } catch (err) {
       return paymentFailedMessage(challenge, "tempo", err);
@@ -1457,10 +1682,9 @@ async function callViaLegacyProxy(
       usedProtocol = completed.protocolUsed === "x402-evm" ? "USDC (x402, Base)" : "USDC (x402, Solana)";
     } catch (err) {
       if (wwwAuth && PRIVATE_KEY) {
-        const parsed = parseWwwAuthenticate(wwwAuth);
         try {
-          const token = await completeTempoPayment(parsed.params, PRIVATE_KEY);
-          paymentHeaders["Authorization"] = `Payment ${token}`;
+          const token = await completeTempoPayment(wwwAuth, PRIVATE_KEY);
+          paymentHeaders["Authorization"] = token;
           usedProtocol = "pathUSD (Tempo)";
         } catch (te) {
           return paymentFailedMessage(challenge, "x402+tempo", `${err}; ${te}`);
@@ -1470,10 +1694,9 @@ async function callViaLegacyProxy(
       }
     }
   } else if (wwwAuth && PRIVATE_KEY) {
-    const parsed = parseWwwAuthenticate(wwwAuth);
     try {
-      const token = await completeTempoPayment(parsed.params, PRIVATE_KEY);
-      paymentHeaders["Authorization"] = `Payment ${token}`;
+      const token = await completeTempoPayment(wwwAuth, PRIVATE_KEY);
+      paymentHeaders["Authorization"] = token;
       usedProtocol = "pathUSD (Tempo)";
     } catch (err) {
       return paymentFailedMessage(challenge, "tempo", err);
@@ -1604,9 +1827,8 @@ async function legacyIntelligenceCall(
     } catch (x402Err) {
       if (wwwAuth && PRIVATE_KEY) {
         try {
-          const parsed = parseWwwAuthenticate(wwwAuth);
-          const tempoToken = await completeTempoPayment(parsed.params, PRIVATE_KEY);
-          paymentHeaders["Authorization"] = `Payment ${tempoToken}`;
+          const tempoToken = await completeTempoPayment(wwwAuth, PRIVATE_KEY);
+          paymentHeaders["Authorization"] = tempoToken;
           usedProtocol = "pathUSD (Tempo)";
         } catch (tempoErr) {
           return {
@@ -1625,9 +1847,8 @@ async function legacyIntelligenceCall(
     }
   } else if (wwwAuth && PRIVATE_KEY) {
     try {
-      const parsed = parseWwwAuthenticate(wwwAuth);
-      const tempoToken = await completeTempoPayment(parsed.params, PRIVATE_KEY);
-      paymentHeaders["Authorization"] = `Payment ${tempoToken}`;
+      const tempoToken = await completeTempoPayment(wwwAuth, PRIVATE_KEY);
+      paymentHeaders["Authorization"] = tempoToken;
       usedProtocol = "pathUSD (Tempo)";
     } catch (tempoErr) {
       return {
@@ -1698,8 +1919,12 @@ function parseWwwAuthenticate(header: string): ChallengeParams {
   return { scheme, params };
 }
 
+// Signs a Tempo TIP-20 transfer for the challenge carried in a 402 response's
+// raw WWW-Authenticate header and returns the FULL Authorization header value
+// ("Payment <b64>", mppx Credential.serialize format) — callers must set it
+// verbatim, never re-prefix with "Payment ".
 async function completeTempoPayment(
-  challengeParams: Record<string, string>,
+  wwwAuthenticateHeader: string,
   privateKey: string,
 ): Promise<string> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1720,10 +1945,16 @@ async function completeTempoPayment(
     const account = viemAccounts.privateKeyToAccount(
       privateKey.startsWith("0x") ? privateKey : `0x${privateKey}`,
     );
+    // polyfill: false — never clobber the host process's globalThis.fetch.
     const client = mppxClient.Mppx.create({
       methods: [mppxClient.tempo({ account })],
+      polyfill: false,
     });
-    return (await client.pay(challengeParams)) as string;
+    const challengeResponse = new Response(null, {
+      status: 402,
+      headers: { "WWW-Authenticate": wwwAuthenticateHeader },
+    });
+    return (await client.createCredential(challengeResponse)) as string;
   } catch (payErr) {
     throw new Error(
       `Tempo payment failed: ${payErr instanceof Error ? payErr.message : String(payErr)}`,
@@ -1762,6 +1993,103 @@ async function completeX402Payment(
   };
 }
 
+// ── Auto SIWS bootstrap ─────────────────────────────────────────────────────
+// When both MPP32_AGENT_KEY and MPP32_SOLANA_PRIVATE_KEY are configured the
+// MCP server proves wallet ownership to the MPP32 backend at startup, which
+// activates M32 holder pricing on every subsequent paid query for the rest of
+// the process lifetime. No user action required.
+
+let siwsVerifiedAddress: string | null = null;
+let siwsTier: string | null = null;
+let siwsDiscountPercent = 0;
+
+async function tryAutoSiws(): Promise<void> {
+  if (!AGENT_KEY || !SOLANA_PRIVATE_KEY) return;
+  try {
+    // Lazy import to keep startup fast when only catalog browsing is needed.
+    const [kitMod, scureBase] = await Promise.all([
+      import("@solana/kit"),
+      import("@scure/base"),
+    ]);
+    const { base58 } = scureBase;
+    const {
+      createKeyPairFromBytes,
+      createKeyPairFromPrivateKeyBytes,
+      getAddressFromPublicKey,
+      signBytes,
+    } = kitMod;
+
+    // Decode the private key. Supports JSON byte array, hex, and base58.
+    let bytes: Uint8Array;
+    if (SOLANA_PRIVATE_KEY.startsWith("[")) {
+      bytes = new Uint8Array(JSON.parse(SOLANA_PRIVATE_KEY));
+    } else if (/^[0-9a-fA-F]+$/.test(SOLANA_PRIVATE_KEY) && SOLANA_PRIVATE_KEY.length % 2 === 0) {
+      bytes = new Uint8Array(Buffer.from(SOLANA_PRIVATE_KEY, "hex"));
+    } else {
+      bytes = base58.decode(SOLANA_PRIVATE_KEY);
+    }
+    let keyPair: CryptoKeyPair;
+    if (bytes.length === 32) {
+      keyPair = await createKeyPairFromPrivateKeyBytes(bytes);
+    } else if (bytes.length === 64) {
+      keyPair = await createKeyPairFromBytes(bytes);
+    } else {
+      console.error(`[mpp32] SIWS skipped: Solana key has unexpected length ${bytes.length}`);
+      return;
+    }
+    const walletAddress = await getAddressFromPublicKey(keyPair.publicKey);
+
+    // Step 1: request a nonce bound to our existing agent session.
+    const nonceRes = await fetchWithTimeout(`${API_URL}/api/auth/siws/nonce`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ wallet: walletAddress, agentKey: AGENT_KEY }),
+      timeoutMs: 8_000,
+    });
+    if (!nonceRes.ok) {
+      const text = await nonceRes.text().catch(() => "");
+      console.error(`[mpp32] SIWS nonce request failed: HTTP ${nonceRes.status} ${text.slice(0, 200)}`);
+      return;
+    }
+    const nonceBody = (await nonceRes.json()) as { data?: { message?: string } };
+    const message = nonceBody.data?.message;
+    if (!message) {
+      console.error("[mpp32] SIWS nonce response missing message");
+      return;
+    }
+
+    // Step 2: sign the canonical message bytes via WebCrypto Ed25519.
+    const signatureBytes = await signBytes(keyPair.privateKey, new TextEncoder().encode(message));
+    const signature = base58.encode(signatureBytes);
+
+    // Step 3: verify with the backend. Backend marks session walletVerified=true.
+    const verifyRes = await fetchWithTimeout(`${API_URL}/api/auth/siws/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ wallet: walletAddress, signature, agentKey: AGENT_KEY }),
+      timeoutMs: 8_000,
+    });
+    if (!verifyRes.ok) {
+      const text = await verifyRes.text().catch(() => "");
+      console.error(`[mpp32] SIWS verify failed: HTTP ${verifyRes.status} ${text.slice(0, 200)}`);
+      return;
+    }
+    const verifyBody = (await verifyRes.json()) as {
+      data?: { walletAddress?: string; tier?: string; discountPercent?: number }
+    };
+    siwsVerifiedAddress = verifyBody.data?.walletAddress ?? walletAddress;
+    siwsTier = verifyBody.data?.tier ?? "none";
+    siwsDiscountPercent = verifyBody.data?.discountPercent ?? 0;
+    const tierLabel = siwsDiscountPercent > 0
+      ? `${siwsTier} tier (${siwsDiscountPercent}% off every paid query)`
+      : "no holder tier (wallet holds zero M32, verification still active)";
+    const shortAddr = `${siwsVerifiedAddress.slice(0, 6)}…${siwsVerifiedAddress.slice(-4)}`;
+    console.error(`[mpp32] SIWS verified for ${shortAddr}: ${tierLabel}`);
+  } catch (err) {
+    console.error(`[mpp32] SIWS bootstrap error: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 // ── Start ───────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -1777,6 +2105,10 @@ async function main() {
   console.error(
     `[mpp32] MCP server v${SERVER_VERSION} on stdio. API ${API_URL}. Configured: ${features}. Timeout ${TIMEOUT_MS}ms.`,
   );
+
+  // Auto SIWS in the background. Does not block startup — if it fails the user
+  // simply pays the standard rate instead of the holder rate.
+  void tryAutoSiws();
   // Per-variable status so a user staring at this log can immediately see
   // whether their env vars made it through. Values are fingerprinted.
   const fp = (v: string | undefined): string =>

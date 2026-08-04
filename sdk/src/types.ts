@@ -10,8 +10,18 @@ export interface RetryConfig {
 
 export interface MPP32Config {
   apiUrl?: string
+  /** EVM private key — used for Tempo pathUSD and x402-on-Base/Ethereum payments. */
   tempoPrivateKey?: string
+  /** Solana private key (base58, JSON byte array, or hex) — for x402 USDC on Solana. */
   solanaPrivateKey?: string
+  /** Optional Solana RPC override used when signing x402 SVM transactions. Defaults to MPP32_SOLANA_RPC_URL or mainnet-beta. */
+  solanaRpcUrl?: string
+  /**
+   * MPP32 agent key (mpp32_agent_...). Enables the free tier, dashboard usage
+   * tracking, and federated-catalog access WITHOUT a wallet. Sent as the
+   * X-Agent-Key header. Defaults to the MPP32_AGENT_KEY env var.
+   */
+  agentKey?: string
   preferredMethod?: PaymentMethod
   headers?: Record<string, string>
   retry?: boolean | Partial<RetryConfig>

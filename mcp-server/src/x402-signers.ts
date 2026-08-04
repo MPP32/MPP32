@@ -18,7 +18,7 @@
 //   { x402Version: 1, scheme: "exact", network, payload: <scheme payload> }
 // base64-encoded into the `X-Payment` HTTP header.
 
-// All heavy crypto dependencies are loaded lazily inside the signer functions.
+// Heavy Solana crypto deps are loaded lazily inside the signer functions.
 // Reason: Claude Desktop ships a bundled Node binary that historically has
 // been Node 18.x. `@solana/kit` and its `@solana/*` sub-packages declare
 // `engines.node: ">=20.18.0"` and use Node-20-only WebCrypto Ed25519 APIs
@@ -33,12 +33,11 @@
 import type { Address } from "@solana/kit";
 
 async function loadSvmDeps() {
-  const [kit, tokenProgram, computeBudgetProgram, bs58Mod, naclMod] = await Promise.all([
+  const [kit, tokenProgram, computeBudgetProgram, scureBase] = await Promise.all([
     import("@solana/kit"),
     import("@solana-program/token"),
     import("@solana-program/compute-budget"),
-    import("bs58"),
-    import("tweetnacl"),
+    import("@scure/base"),
   ]).catch((err: unknown) => {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(
@@ -50,6 +49,7 @@ async function loadSvmDeps() {
   return {
     address: kit.address,
     createKeyPairSignerFromBytes: kit.createKeyPairSignerFromBytes,
+    createKeyPairSignerFromPrivateKeyBytes: kit.createKeyPairSignerFromPrivateKeyBytes,
     createSolanaRpc: kit.createSolanaRpc,
     createTransactionMessage: kit.createTransactionMessage,
     setTransactionMessageFeePayer: kit.setTransactionMessageFeePayer,
@@ -63,8 +63,7 @@ async function loadSvmDeps() {
     TOKEN_PROGRAM_ADDRESS: tokenProgram.TOKEN_PROGRAM_ADDRESS,
     getSetComputeUnitLimitInstruction: computeBudgetProgram.getSetComputeUnitLimitInstruction,
     getSetComputeUnitPriceInstruction: computeBudgetProgram.getSetComputeUnitPriceInstruction,
-    bs58: bs58Mod.default ?? (bs58Mod as unknown as { decode: (s: string) => Uint8Array }),
-    nacl: naclMod.default ?? (naclMod as unknown as { sign: { keyPair: { fromSeed: (s: Uint8Array) => { secretKey: Uint8Array } } } }),
+    base58: scureBase.base58,
   };
 }
 
@@ -154,20 +153,20 @@ function decodeSolanaSecret(raw: string, deps: SvmDeps): Uint8Array {
   if (/^[0-9a-fA-F]+$/.test(raw) && raw.length % 2 === 0) {
     return new Uint8Array(Buffer.from(raw, "hex"));
   }
-  return deps.bs58.decode(raw);
+  return deps.base58.decode(raw);
 }
 
 async function buildSolanaSigner(rawKey: string, deps: SvmDeps) {
-  let bytes = decodeSolanaSecret(rawKey, deps);
+  const bytes = decodeSolanaSecret(rawKey, deps);
   if (bytes.length === 32) {
-    // 32-byte seed — kit's createKeyPairSignerFromBytes wants the 64-byte
-    // expanded key. Derive via tweetnacl.
-    const kp = deps.nacl.sign.keyPair.fromSeed(bytes);
-    bytes = kp.secretKey;
-  } else if (bytes.length !== 64) {
-    throw new Error(`Solana private key must be a 32-byte seed or a 64-byte expanded key; got ${bytes.length} bytes.`);
+    // 32-byte seed — kit derives the public key via WebCrypto Ed25519.
+    return await deps.createKeyPairSignerFromPrivateKeyBytes(bytes);
   }
-  return await deps.createKeyPairSignerFromBytes(bytes);
+  if (bytes.length === 64) {
+    // 64-byte expanded key (seed || publicKey) — kit's standard path.
+    return await deps.createKeyPairSignerFromBytes(bytes);
+  }
+  throw new Error(`Solana private key must be a 32-byte seed or a 64-byte expanded key; got ${bytes.length} bytes.`);
 }
 
 // ── SVM signer ──────────────────────────────────────────────────────────────
@@ -179,6 +178,7 @@ export async function signX402PaymentSvm(
   rawKey: string,
   rpcUrlOverride?: string,
   echoedVersion: number = 1,
+  computeUnitLimitOverride?: number,
 ): Promise<string> {
   if (requirements.scheme !== "exact") {
     throw new Error(`SVM x402 scheme "${requirements.scheme}" not implemented; only "exact" is supported.`);
@@ -238,7 +238,12 @@ export async function signX402PaymentSvm(
   const { value: latestBlockhash } = await rpc.getLatestBlockhash({ commitment: "confirmed" }).send();
 
   const instructions = [
-    deps.getSetComputeUnitLimitInstruction({ units: 150_000 }),
+    // Compute-unit limit must stay under the facilitator's fee-payer cap. PayAI
+    // rejects anything above ~60,000 CU as `compute_limit_too_high` (it pays the
+    // fee, so it bounds the budget). 50,000 is comfortably under that cap and far
+    // above the ~7,000 CU an SPL TransferChecked + compute-budget ixs consume.
+    // (Verified against PayAI /verify 2026-06-17: 150,000 was rejected outright.)
+    deps.getSetComputeUnitLimitInstruction({ units: computeUnitLimitOverride ?? 50_000 }),
     deps.getSetComputeUnitPriceInstruction({ microLamports: 1_000n }),
     deps.getTransferCheckedInstruction({
       source: sourceAta,

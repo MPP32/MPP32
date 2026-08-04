@@ -17,16 +17,23 @@ One install. Pay any x402 endpoint on Solana from your agent. Browse a federated
 |:-----|:-------|:--------|:------|
 | x402 | Production | Solana (mainnet) | USDC |
 | x402 | Production | Base | USDC |
-| Tempo | Envelope wired, gated off in production until the client flow is verified end to end | Ethereum L2 | pathUSD |
-| ACP / AP2 / AGTP | Envelopes wired, gated off in production | Multi chain | per protocol |
+| Tempo | Production | Tempo (mainnet, chain 4217) | pathUSD |
+| AP2 / AGTP | Production (authorization and identity layers) | Chain agnostic | per protocol |
+| ACP | Envelope wired, gated off in production | Multi chain | checkout session |
 
-The MCP server ships signers for both Solana and Base out of the box. When a paid call returns a 402, the server picks the network that matches the key you configured and settles the payment in one round trip.
+The MCP server ships signers for Solana, Base, and Tempo out of the box. When a paid call returns a 402, the server picks the rail that matches the key you configured and settles the payment in one round trip. `MPP32_SOLANA_PRIVATE_KEY` pays x402 on Solana; `MPP32_PRIVATE_KEY` (0x-prefixed EVM key) pays x402 on Base and Tempo pathUSD challenges.
 
-## Try it free first (no keys, no setup)
+## Free Tier: 10 calls/day, no wallet required
 
-The MCP server exposes a **`try_solana_token_intelligence_free`** tool that returns the full Intelligence Oracle payload (alpha score, rug risk, whale activity, smart money signals, 24h pump probability, market data) for any Solana token with **zero configuration** — no `MPP32_AGENT_KEY`, no Solana key, no payment. Rate-limited to 10 calls/minute per IP. Use it to evaluate the oracle, then switch to `get_solana_token_intelligence` for unlimited attributed usage at $0.008/query (M32 holders save up to 40%).
+Every agent session gets **10 free Intelligence Oracle calls per day** — no wallet, no USDC, no payment setup. Just set `MPP32_AGENT_KEY` (free, instant, no signup at [mpp32.org/agent-console](https://mpp32.org/agent-console)) and start calling `get_solana_token_intelligence`. Free tier resets at midnight UTC.
 
-Just install the server and ask your agent: _"Use mpp32 to get a free intelligence preview for SOL."_
+This lets you **test your full MCP integration end-to-end** before committing any crypto. Build working prototypes, evaluate the data quality, and ship to production — the free tier covers typical development and light usage indefinitely.
+
+After free tier: $0.008/query paid via x402 (USDC on Solana). M32 holders save up to 40%.
+
+### Quick anonymous test (no keys at all)
+
+The **`try_solana_token_intelligence_free`** tool returns the same payload with zero configuration — just install and call. Rate-limited to 10/minute per IP. Good for a quick taste, but the 10/day free tier with an agent key is better for real work.
 
 ## Why this beats running your own integrations
 
@@ -257,7 +264,7 @@ Sessions are scoped, revocable, and rotate cleanly. The key is hashed at rest on
 
 x402 payments are verified on chain through the Solana facilitator (for SVM) or the Base facilitator (for EVM). MPP32 never holds custody of funds. Every paid call settles directly from the caller's wallet to the provider's wallet.
 
-Tempo, ACP, AP2, and AGTP envelopes are implemented in the proxy and tested against synthetic challenges, but the corresponding client signing flows are not yet exposed by this MCP. Those rails stay disabled in production until each has a verified end to end client flow. Treat the catalog as an x402 catalog today; the rest will light up as their clients land.
+Tempo payments are verified on chain by the proxy's mppx integration: the client signs a TIP-20 pathUSD transfer against the live challenge and the server confirms the transfer on Tempo mainnet before releasing the response. AP2 and AGTP run as live authorization and identity layers on every paid route. The ACP envelope is implemented and tested against synthetic challenges but stays disabled in production until its checkout-session client flow is verified end to end.
 
 ## For API providers
 

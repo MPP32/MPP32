@@ -1,6 +1,6 @@
 {
   "name": "mpp32",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "SDK for the MPP32 Machine-Payable API Platform — Solana token intelligence with dual-protocol payments (Tempo + x402 USDC)",
   "type": "module",
   "main": "./dist/index.js",
@@ -28,10 +28,18 @@
   ],
   "license": "MIT",
   "peerDependencies": {
+    "@scure/base": ">=1.2.0",
+    "@solana-program/compute-budget": ">=0.15.0",
+    "@solana-program/token": ">=0.13.0",
+    "@solana/kit": ">=2.0.0",
     "mppx": ">=0.4.0",
     "viem": ">=2.0.0"
   },
   "peerDependenciesMeta": {
+    "@scure/base": { "optional": true },
+    "@solana-program/compute-budget": { "optional": true },
+    "@solana-program/token": { "optional": true },
+    "@solana/kit": { "optional": true },
     "mppx": { "optional": true },
     "viem": { "optional": true }
   },

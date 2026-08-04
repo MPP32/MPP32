@@ -10,14 +10,30 @@ npm install mpp32
 
 ### Payment dependencies
 
-Install the peer dependencies for whichever payment protocol you need:
+The signing libraries are **optional** — free-tier and read-only calls
+(`listServices`, agent-key'd `analyze`) need none of them. Install only the peer
+dependencies for the protocol you actually pay with. If they are missing when a
+payment is attempted, the SDK throws a clear error naming the exact package to
+install (it never silently sends a broken or unsigned envelope):
 
 ```bash
 # Tempo (pathUSD on Ethereum L2)
 npm install mppx viem
 
-# x402 (USDC on Solana)
-npm install @solana/web3.js
+# x402 (USDC on Base / Ethereum)
+npm install viem
+
+# x402 (USDC on Solana) — requires Node 20.18+
+npm install @solana/kit @solana-program/token @solana-program/compute-budget @scure/base
+```
+
+### Free tier / no wallet
+
+You can construct the client with just an agent key (no private key) to use the
+free tier, dashboard usage tracking, and `listServices`:
+
+```ts
+const client = new MPP32({ agentKey: process.env.MPP32_AGENT_KEY })
 ```
 
 ## Quick Start
@@ -57,7 +73,7 @@ const client = new MPP32({
 })
 ```
 
-At least one payment key is required. When `preferredMethod` is `'auto'` (the default), the SDK prefers x402 if a Solana key is provided.
+No key is required to construct the client — free-tier and read-only calls work with just an `agentKey` (or nothing). A private key is only required when a real 402 challenge must be signed. When `preferredMethod` is `'auto'` (the default), the SDK prefers x402 if a Solana key is provided.
 
 ## API
 

@@ -5,8 +5,16 @@ import type {
   ServiceInfo,
   PaymentChallenge,
 } from './types.js'
+import { signX402Payment } from './x402-signers.js'
 
 const DEFAULT_API_URL = 'https://mpp32.org'
+const SDK_VERSION = '0.1.1'
+
+// Read an env var without assuming a Node global is present (browser/edge safe).
+function readEnv(name: string): string | undefined {
+  const p = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
+  return p?.env?.[name]
+}
 
 const DEFAULT_RETRY_CONFIG: RetryConfig = {
   maxRetries: 3,
@@ -20,6 +28,8 @@ export class MPP32 {
   private apiUrl: string
   private tempoPrivateKey?: string
   private solanaPrivateKey?: string
+  private solanaRpcUrl?: string
+  private agentKey?: string
   private preferredMethod: 'tempo' | 'x402' | 'auto'
   private defaultHeaders: Record<string, string>
   private retryConfig: RetryConfig | null
@@ -28,6 +38,11 @@ export class MPP32 {
     this.apiUrl = (config.apiUrl ?? DEFAULT_API_URL).replace(/\/$/, '')
     this.tempoPrivateKey = config.tempoPrivateKey
     this.solanaPrivateKey = config.solanaPrivateKey
+    this.solanaRpcUrl = config.solanaRpcUrl ?? readEnv('MPP32_SOLANA_RPC_URL')
+    // Agent key enables the free tier, dashboard usage tracking, and calling
+    // federated catalog entries — no wallet required. Mirrors how the MPP32 MCP
+    // server sends X-Agent-Key on POST /api/agent/execute.
+    this.agentKey = config.agentKey ?? readEnv('MPP32_AGENT_KEY')
     this.preferredMethod = config.preferredMethod ?? 'auto'
     this.defaultHeaders = config.headers ?? {}
 
@@ -39,11 +54,10 @@ export class MPP32 {
       this.retryConfig = { ...DEFAULT_RETRY_CONFIG, ...config.retry }
     }
 
-    if (!this.tempoPrivateKey && !this.solanaPrivateKey) {
-      throw new Error(
-        'MPP32: At least one payment key is required. Provide tempoPrivateKey (EVM key for pathUSD) or solanaPrivateKey (for USDC on Solana).',
-      )
-    }
+    // No key is required to construct the client: free-tier and read-only calls
+    // (listServices, agent-key'd analyze) work without a wallet. A private key is
+    // only required when a real 402 challenge must actually be signed — that case
+    // fails loudly at payment time (see selectPaymentMethod / completePayment).
   }
 
   async analyze(token: string): Promise<IntelligenceResult> {
@@ -126,7 +140,13 @@ export class MPP32 {
         'MPP32: No compatible payment method available. Server offered: ' +
           challenges.map((c) => c.protocol).join(', ') +
           '. You have keys for: ' +
-          [this.tempoPrivateKey ? 'tempo' : null, this.solanaPrivateKey ? 'x402' : null].filter(Boolean).join(', '),
+          [
+            this.tempoPrivateKey ? 'tempo' : null,
+            this.solanaPrivateKey || this.tempoPrivateKey ? 'x402' : null,
+          ]
+            .filter(Boolean)
+            .join(', ') +
+          '. Provide solanaPrivateKey (USDC on Solana) or tempoPrivateKey (EVM) to sign a payment.',
       )
     }
 
@@ -134,7 +154,9 @@ export class MPP32 {
     const paymentHeaders = new Headers(mergedInit.headers as HeadersInit ?? {})
 
     if (selected.protocol === 'tempo') {
-      paymentHeaders.set('Authorization', `Payment ${paymentHeader}`)
+      // completeTempoPayment returns the full header value ("Payment <b64>",
+      // mppx Credential.serialize format) — set it verbatim.
+      paymentHeaders.set('Authorization', paymentHeader)
     } else {
       paymentHeaders.set('X-Payment', paymentHeader)
     }
@@ -153,6 +175,14 @@ export class MPP32 {
   }
 
   private async fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
+    // Identify this surface to the backend's usage tracking (mcp/sdk/web split).
+    const headers = new Headers(init.headers as HeadersInit ?? {})
+    if (!headers.has('X-MPP32-Client')) headers.set('X-MPP32-Client', `sdk/${SDK_VERSION}`)
+    // Attach the agent key on every request so free-tier quota, dashboard usage
+    // tracking, and federated-catalog access work without a wallet.
+    if (this.agentKey && !headers.has('X-Agent-Key')) headers.set('X-Agent-Key', this.agentKey)
+    init = { ...init, headers }
+
     if (!this.retryConfig) return fetch(url, init)
 
     const { maxRetries, initialDelayMs, maxDelayMs, backoffMultiplier, retryableStatusCodes } = this.retryConfig
@@ -248,14 +278,19 @@ export class MPP32 {
       return tempo && this.tempoPrivateKey ? tempo : null
     }
 
+    // x402 needs an SVM key (Solana challenges) or an EVM key (Base/Ethereum
+    // challenges). The exact key is resolved per-network inside signX402Payment,
+    // which throws a precise error if the required one is missing.
+    const canSignX402 = !!(this.solanaPrivateKey || this.tempoPrivateKey)
+
     if (this.preferredMethod === 'x402') {
       const x402 = challenges.find((c) => c.protocol === 'x402')
-      return x402 && this.solanaPrivateKey ? x402 : null
+      return x402 && canSignX402 ? x402 : null
     }
 
     // auto: prefer x402 if available (lower fees on Solana)
     const x402 = challenges.find((c) => c.protocol === 'x402')
-    if (x402 && this.solanaPrivateKey) return x402
+    if (x402 && canSignX402) return x402
 
     const tempo = challenges.find((c) => c.protocol === 'tempo')
     if (tempo && this.tempoPrivateKey) return tempo
@@ -289,82 +324,41 @@ export class MPP32 {
     const account = viemAccounts.privateKeyToAccount(
       key.startsWith('0x') ? key : `0x${key}`,
     )
+    // polyfill: false — never clobber the host application's globalThis.fetch.
     const client = mppxClient.Mppx.create({
       methods: [mppxClient.tempo({ account })],
+      polyfill: false,
     })
-    return client.pay(challenge.params)
+    // createCredential parses the challenge from a 402 Response's
+    // WWW-Authenticate header, signs the TIP-20 transfer with the local key,
+    // and returns the full "Payment <b64>" Authorization value.
+    const challengeResponse = new Response(null, {
+      status: 402,
+      headers: { 'WWW-Authenticate': challenge.rawHeader },
+    })
+    return client.createCredential(challengeResponse)
   }
 
   private async completeX402Payment(challenge: PaymentChallenge): Promise<string> {
-    // x402 payment: sign the payment requirements and return base64 payload
-    // The x402 flow uses the facilitator for verification — the client just needs
-    // to sign a Solana transaction authorizing the USDC transfer
-    let solanaWeb3: any
-    let nacl: any
-
-    try {
-      const solanaPkg = '@solana/web3.js'
-      solanaWeb3 = await import(solanaPkg)
-    } catch {
-      throw new Error(
-        'x402 payment requires @solana/web3.js. Install it:\n  npm install @solana/web3.js',
-      )
-    }
-
-    try {
-      const naclPkg = 'tweetnacl'
-      nacl = await import(naclPkg)
-    } catch {
-      // Fall back to using web3.js signing
-      nacl = null
-    }
-
-    const requirements = challenge.params as Record<string, any>
-    const privateKeyBytes = this.decodeSolanaPrivateKey(this.solanaPrivateKey!)
-    const keypair = solanaWeb3.Keypair.fromSecretKey(privateKeyBytes)
-
-    const payload = {
-      x402Version: 1,
-      scheme: requirements.scheme ?? 'exact',
-      network: requirements.network ?? 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
-      payload: {
-        signature: '',
-        transaction: '',
-        from: keypair.publicKey.toBase58(),
-        amount: requirements.maxAmountRequired,
-        asset: requirements.asset,
-        payTo: requirements.payTo,
-        nonce: Date.now().toString(),
-      },
-    }
-
-    const message = JSON.stringify(payload.payload)
-    const messageBytes = new TextEncoder().encode(message)
-    const signature = nacl
-      ? nacl.sign.detached(messageBytes, keypair.secretKey)
-      : keypair.secretKey.slice(0, 64) // fallback
-
-    payload.payload.signature = Buffer.from(signature).toString('base64')
-
-    return Buffer.from(JSON.stringify(payload)).toString('base64')
-  }
-
-  private decodeSolanaPrivateKey(key: string): Uint8Array {
-    // Support base58-encoded or JSON array format
-    if (key.startsWith('[')) {
-      return new Uint8Array(JSON.parse(key))
-    }
-    // Assume base58 — decode manually or use bs58
-    try {
-      const bs58Pkg = 'bs58'
-      const bs58 = require(bs58Pkg)
-      return bs58.decode(key)
-    } catch {
-      // Fallback: try as hex
-      if (/^[0-9a-fA-F]+$/.test(key)) {
-        return new Uint8Array(Buffer.from(key, 'hex'))
-      }
-      throw new Error('MPP32: Could not decode Solana private key. Provide as base58 string or JSON byte array.')
-    }
+    // Build a REAL x402-spec-compliant payment envelope and return it as the
+    // base64 X-Payment header value.
+    //
+    // For Solana this is a base64 partially-signed VersionedTransaction (SPL
+    // TransferChecked between ATAs, fee-payer slot reserved for the facilitator)
+    // — exactly what the backend's verifyX402Envelope / settleX402Payment expect
+    // as `paymentPayload`. For Base/Ethereum it is an EIP-3009
+    // transferWithAuthorization signature. Both v1 (top-level requirements) and
+    // v2 (`accepts` array) challenge shapes are handled, mirroring the MPP32 MCP
+    // server. Only signatures ever leave this process — never a private key.
+    //
+    // `challenge.rawHeader` is the base64 Payment-Required challenge from the
+    // server; signX402Payment decodes it and picks the right network/key.
+    const result = await signX402Payment({
+      paymentRequiredHeader: challenge.rawHeader,
+      solanaKey: this.solanaPrivateKey,
+      evmKey: this.tempoPrivateKey,
+      solanaRpcUrl: this.solanaRpcUrl,
+    })
+    return result.xPaymentHeader
   }
 }

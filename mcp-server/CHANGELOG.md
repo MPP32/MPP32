@@ -4,34 +4,137 @@ All notable changes to `mpp32-mcp-server` are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-07-14
+
+### Fixed
+
+* **Tempo payments now actually work.** `completeTempoPayment` called
+  `client.pay(...)`, a method that does not exist on the mppx client —
+  every Tempo payment attempt threw `client.pay is not a function` before
+  a transaction was ever signed. The signer now uses the real mppx API:
+  `Mppx.create({ methods: [tempo({ account })], polyfill: false })
+  .createCredential(response)`, driven by the raw `WWW-Authenticate`
+  challenge header. Verified end-to-end against Tempo Mainnet (chain 4217):
+  the client parses the live challenge, signs a TIP-20 pathUSD transfer,
+  and the backend's on-chain verification accepts/rejects it correctly.
+* **Authorization header format.** mppx credentials serialize as the full
+  `Payment <base64url>` header value; the old code re-prefixed it, producing
+  the invalid `Payment Payment <…>`. The credential is now set verbatim.
+* **No more fetch polyfill side effect.** `Mppx.create` polyfills
+  `globalThis.fetch` by default; the signer now passes `polyfill: false` so
+  the MCP server's own fetch is never wrapped.
+
+### Changed
+
+* Tempo (pathUSD) is now enabled in MPP32 production alongside x402 on
+  Solana and Base — `MPP32_PRIVATE_KEY` (0x-prefixed EVM key) pays both
+  x402-on-Base and Tempo challenges automatically.
+* **`mppx` promoted from optional peer dependency to a pinned direct
+  dependency (`0.4.12`).** With Tempo live in production, an `npx` user
+  must never hit "Tempo payment client not available. Install: npm install
+  mppx viem" — the signer now works out of the box. Adds mppx's five
+  transitive dependencies; `viem` was already bundled.
+
+## [1.7.0] - 2026-06-07
+
+### Changed
+
+* **Supply-chain cleanup.** Dropped three direct dependencies that were
+  driving Socket.dev alerts on the published package:
+  * `tweetnacl` (unmaintained since 2020): the 32-byte-seed → 64-byte
+    keypair derivation now uses
+    `@solana/kit`'s `createKeyPairSignerFromPrivateKeyBytes` directly
+    via WebCrypto Ed25519.
+  * `cheerio` (and its 21 transitives, including the deprecated
+    `whatwg-encoding@3.1.1`): `get_pivx_dao_intelligence` now calls the
+    MPP32 backend's `/api/governance` endpoint instead of scraping
+    `pivx.org` client-side. Same payload; the backend has served it since
+    1.4.0.
+  * `bs58` + `base-x`: replaced with the already-in-tree `@scure/base`
+    `base58` codec.
+  Net effect: published install drops from 181 to ~155 transitive
+  packages, zero deprecated, zero unmaintained-since-2020.
+* **All direct dependencies pinned to exact versions** (no `^` ranges).
+* **`engines.node` raised to `>=20.10.0`** (Node 18 reached end-of-life
+  in April 2025; WebCrypto Ed25519 is native on 20.10+).
+
+### Added
+
+* **npm provenance.** Releases now ship with an [npm provenance
+  attestation](https://docs.npmjs.com/generating-provenance-statements)
+  linking the tarball to the exact GitHub Actions run that built it.
+  Verify with `npm audit signatures`.
+* **`SECURITY.md` included in the published tarball**, describing
+  runtime behavior, the env vars the server reads, and the egress
+  allow-list.
+* **`docs/EGRESS.md`** (repo) enumerates every outbound host the MCP
+  server reaches and why.
+* **`socket.yml`** (repo) documents the small set of behavior alerts we
+  consciously accept (`envVars`, `networkAccess`, `hasBin`) with links
+  to where each behavior is implemented.
+
+### Removed
+
+* `pivx-provider.ts` (the cheerio-based client-side scraper). Replaced
+  by a 25-line wrapper around `${MPP32_API_URL}/api/governance`.
+
+### Security
+
+* No code-level vulnerability fixed; this release exists to eliminate
+  supply-chain-risk surface area on the published package.
+
+## [1.6.0] - 2026-06-02
+
+### Added
+
+* **Auto Sign In With Solana (SIWS) at startup.** When both `MPP32_AGENT_KEY`
+  and `MPP32_SOLANA_PRIVATE_KEY` are configured, the MCP server proves wallet
+  ownership to the MPP32 backend on the first run and activates M32 holder
+  pricing on every subsequent paid query for the rest of the process lifetime.
+  The signed message is the canonical SIWS structure (single use nonce, five
+  minute expiry, domain bound to mpp32.org). Holders pay $0.0048 per
+  Intelligence Oracle query at the 1M tier and $0.0064 at the 250K tier with
+  zero extra setup beyond the Solana key already used for x402 payments.
+
+### Changed
+
+* **`get_mpp32_diagnostics` output adds an "M32 holder pricing" capability
+  row** showing the verified wallet, the tier, and the active discount once
+  SIWS has run.
+
 ## [1.5.0] - 2026-06-01
 
 ### Added
 
-* **`try_solana_token_intelligence_free` MCP tool.** Free intelligence
-  preview, no agent key and no payment key required. Returns the same alpha
-  score, rug risk, whale activity, smart money signals, pump probability,
-  and market data payload as the paid endpoint. Rate limit ten calls per
-  minute per IP. Ships as the first call agents make when evaluating MPP32
-  so the oracle proves itself before any credential setup.
+* **`try_solana_token_intelligence_free` MCP tool — zero-friction preview.**
+  Hits the backend `/api/intelligence/demo` endpoint. Returns the same alpha
+  score, rug risk, whale activity, smart money signals, pump probability, and
+  market data payload as the paid endpoint, but requires no `MPP32_AGENT_KEY`
+  and no Solana private key. Rate-limited to 10 calls/minute per IP. Intended
+  as the first call new users (and Claude itself) make when evaluating MPP32 —
+  see the data quality, THEN configure paid access. This closes the
+  conversion-funnel gap where new agents previously hit a 402 wall on their
+  very first call before ever seeing the oracle's output.
 
 ### Changed
 
-* **`get_solana_token_intelligence` description updated** to direct agents
+* **`get_solana_token_intelligence` description updated** to point new users
   with no keys configured at `try_solana_token_intelligence_free` first.
-* **`get_mpp32_diagnostics` output updated** to surface the free preview as
-  the immediate next step when a key configuration is incomplete.
+* **`get_mpp32_diagnostics` output updated** to mention the free demo when
+  the user is not yet ready to pay end-to-end.
 
-### Backend (server side compatibility, no client action required)
+### Backend (server-side compatibility, no client action required)
 
-* x402 settlement runs against PayAI's facilitator
-  (`https://facilitator.payai.network`) with Coinbase CDP wired as the
-  failover endpoint. Both advertise Solana mainnet
-  (`solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`). A startup probe and a CI
-  integration test confirm the configured facilitator advertises the
-  configured network on every deploy, and per request failover routes
-  verify and settle to the backup on transport errors. The MCP signer's
-  network detection (`x402-signers.ts`) and protocol handling are unchanged.
+* MPP32 backend now defaults to PayAI (`https://facilitator.payai.network`)
+  as the x402 facilitator, with Coinbase CDP as a documented fallback. PayAI
+  is the only public facilitator that supports Solana **mainnet**
+  (`solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`); the previous default
+  (`x402.org/facilitator`) is testnet/devnet-only and was silently failing
+  every mainnet settlement. The backend now refuses to boot in production
+  if no configured facilitator supports the configured network — making this
+  exact regression class impossible. No MCP client change required: the
+  signer's network detection (`x402-signers.ts`) and protocol handling are
+  unchanged.
 
 ## [1.4.0] - 2026-05-21
 

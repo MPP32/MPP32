@@ -1,0 +1,36 @@
+# Socket.dev project configuration
+# https://docs.socket.dev/docs/socket-yml
+#
+# This file documents alerts we have evaluated and consciously accepted for
+# `mpp32-mcp-server`. Every entry corresponds to a behavior that is
+# intrinsic to the package's purpose (payments + service discovery for AI
+# agents) and is documented in human-readable form elsewhere in the repo.
+#
+# Anything NOT listed here should still surface in Socket's UI.
+
+version: 2
+
+projectIgnorePaths:
+  - mcp-server/dist/**
+  - "**/node_modules/**"
+
+issueRules:
+  # MCP server purpose: read three documented credential env vars
+  # (MPP32_AGENT_KEY, MPP32_PRIVATE_KEY, MPP32_SOLANA_PRIVATE_KEY).
+  # Validation lives in src/index.ts:readEnv() and never logs the values.
+  envVars: false
+
+  # MCP server purpose: call the MPP32 federated catalog and settle x402
+  # payments. The full outbound host allow-list is in docs/EGRESS.md.
+  networkAccess: false
+
+  # Single bin entry (`mpp32-mcp-server`) matches the package name.
+  hasBin: false
+
+  # `cross-spawn` is a transitive dep of @modelcontextprotocol/sdk
+  # (its HTTP transport uses it). Stdio path never reaches it.
+  shellAccess: false
+
+  # `prepublishOnly: "npm run build"` is the only lifecycle hook and runs
+  # locally during release; not executed on install for end users.
+  installScripts: false
